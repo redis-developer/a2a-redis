@@ -1,0 +1,81 @@
+[build-system]
+requires = ["setuptools>=45", "wheel", "setuptools_scm[toml]>=6.2"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "a2a-redis"
+description = "Redis components for the Agent-to-Agent (A2A) Python SDK"
+readme = "README.md"
+requires-python = ">=3.8"
+license = {text = "MIT"}
+authors = [
+    {name = "A2A Redis Contributors"}
+]
+keywords = ["a2a", "agent", "redis", "queue", "task-store"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: System :: Distributed Computing",
+]
+dependencies = [
+    "redis>=4.0.0",
+    "a2a-python",
+]
+dynamic = ["version"]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=6.0",
+    "pytest-asyncio",
+    "pytest-cov",
+    "black",
+    "isort",
+    "mypy",
+    "ruff",
+]
+
+[project.urls]
+Homepage = "https://github.com/a2aproject/a2a-redis"
+Repository = "https://github.com/a2aproject/a2a-redis"
+Issues = "https://github.com/a2aproject/a2a-redis/issues"
+
+[tool.setuptools_scm]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-dir]
+"" = "src"
+
+[tool.black]
+line-length = 88
+target-version = ['py38']
+
+[tool.isort]
+profile = "black"
+multi_line_output = 3
+
+[tool.mypy]
+python_version = "3.8"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+
+[tool.ruff]
+target-version = "py38"
+line-length = 88
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_functions = ["test_*"]
+addopts = "--cov=a2a_redis --cov-report=term-missing"
