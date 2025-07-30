@@ -6,10 +6,11 @@ build-backend = "setuptools.build_meta"
 name = "a2a-redis"
 description = "Redis components for the Agent-to-Agent (A2A) Python SDK"
 readme = "README.md"
-requires-python = ">=3.8"
+requires-python = ">=3.11"
 license = {text = "MIT"}
 authors = [
-    {name = "A2A Redis Contributors"}
+    {name = "Redis, Inc."},
+    {name = "Andrew Brookins"}
 ]
 keywords = ["a2a", "agent", "redis", "queue", "task-store"]
 classifiers = [
@@ -18,9 +19,6 @@ classifiers = [
     "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.8",
-    "Programming Language :: Python :: 3.9",
-    "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Topic :: Software Development :: Libraries :: Python Modules",
@@ -28,7 +26,8 @@ classifiers = [
 ]
 dependencies = [
     "redis>=4.0.0",
-    "a2a-python",
+    "a2a-sdk>=0.2.16",
+    "uvicorn>=0.35.0",
 ]
 dynamic = ["version"]
 
@@ -65,17 +64,49 @@ profile = "black"
 multi_line_output = 3
 
 [tool.mypy]
-python_version = "3.8"
+python_version = "3.11"
 warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = true
 
 [tool.ruff]
-target-version = "py38"
+target-version = "py311"
 line-length = 88
+
+[tool.pyright]
+include = ["src", "tests", "examples"]
+exclude = ["**/node_modules", "**/__pycache__"]
+pythonVersion = "3.11"
+pythonPlatform = "All"
+typeCheckingMode = "strict"
+reportMissingImports = true
+reportMissingTypeStubs = false
+reportUnusedImport = true
+reportUnusedVariable = true
+reportDuplicateImport = true
+reportOptionalMemberAccess = true
+reportOptionalCall = true
+reportOptionalIterable = true
+reportOptionalContextManager = true
+reportOptionalOperand = true
+reportTypedDictNotRequiredAccess = false
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_functions = ["test_*"]
 addopts = "--cov=a2a_redis --cov-report=term-missing"
+
+[dependency-groups]
+dev = [
+    "black>=25.1.0",
+    "isort>=6.0.1",
+    "mypy>=1.17.0",
+    "pre-commit>=4.2.0",
+    "pyright>=1.1.403",
+    "pytest>=8.4.1",
+    "pytest-asyncio>=1.1.0",
+    "pytest-cov>=6.2.1",
+    "pytest-xdist>=3.8.0",
+    "ruff>=0.12.6",
+]

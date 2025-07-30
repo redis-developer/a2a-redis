@@ -1,360 +1,294 @@
-"""Tests for RedisQueueManager."""
+"""Tests for RedisQueueManager and RedisEventQueue."""
 
 import json
 import pytest
-from unittest.mock import MagicMock, patch
-import redis
+from unittest.mock import MagicMock
 
-from a2a_redis.queue_manager import RedisQueueManager
+from a2a_redis.queue_manager import RedisQueueManager, RedisEventQueue
+
+
+class TestRedisEventQueue:
+    """Tests for RedisEventQueue."""
+
+    def test_init(self, mock_redis):
+        """Test RedisEventQueue initialization."""
+        queue = RedisEventQueue(mock_redis, "task_123", prefix="test:")
+        assert queue.redis == mock_redis
+        assert queue.task_id == "task_123"
+        assert queue.prefix == "test:"
+        assert queue._queue_key == "test:task_123"
+        assert not queue._closed
+
+    def test_enqueue_event_simple(self, mock_redis):
+        """Test enqueueing a simple event."""
+        queue = RedisEventQueue(mock_redis, "task_123")
+
+        # Mock event data
+        event = {"type": "test", "data": "sample"}
+        queue.enqueue_event(event)
+
+        # Should call LPUSH with serialized event
+        mock_redis.lpush.assert_called_once()
+        call_args = mock_redis.lpush.call_args
+        assert call_args[0][0] == "queue:task_123"  # queue key
+
+        # Verify serialized data
+        serialized_data = json.loads(call_args[0][1])
+        assert serialized_data["type"] == "dict"
+        assert serialized_data["data"] == event
+
+    def test_enqueue_event_with_model_dump(self, mock_redis):
+        """Test enqueueing event with model_dump method."""
+        queue = RedisEventQueue(mock_redis, "task_123")
+
+        # Mock Pydantic-like object
+        mock_event = MagicMock()
+        mock_event.model_dump.return_value = {"field": "value"}
+        type(mock_event).__name__ = "MockEvent"
+
+        queue.enqueue_event(mock_event)
+
+        mock_redis.lpush.assert_called_once()
+        call_args = mock_redis.lpush.call_args
+        serialized_data = json.loads(call_args[0][1])
+        assert serialized_data["type"] == "MockEvent"
+        assert serialized_data["data"] == {"field": "value"}
+
+    def test_enqueue_event_closed_queue(self, mock_redis):
+        """Test enqueueing to closed queue raises error."""
+        queue = RedisEventQueue(mock_redis, "task_123")
+        queue.close()
+
+        with pytest.raises(RuntimeError, match="Cannot enqueue to closed queue"):
+            queue.enqueue_event({"test": "data"})
+
+    def test_dequeue_event_no_wait(self, mock_redis):
+        """Test dequeueing with no_wait=True."""
+        queue = RedisEventQueue(mock_redis, "task_123")
+
+        # Mock Redis response
+        mock_event_data = json.dumps({"type": "TestEvent", "data": {"field": "value"}})
+        mock_redis.rpop.return_value = mock_event_data.encode()
+
+        result = queue.dequeue_event(no_wait=True)
+
+        assert result == {"field": "value"}
+        mock_redis.rpop.assert_called_once_with("queue:task_123")
+
+    def test_dequeue_event_no_wait_empty(self, mock_redis):
+        """Test dequeueing with no_wait=True when queue is empty."""
+        queue = RedisEventQueue(mock_redis, "task_123")
+        mock_redis.rpop.return_value = None
+
+        with pytest.raises(RuntimeError, match="No events available"):
+            queue.dequeue_event(no_wait=True)
+
+    def test_dequeue_event_blocking(self, mock_redis):
+        """Test dequeueing with blocking."""
+        queue = RedisEventQueue(mock_redis, "task_123")
+
+        # Mock Redis BRPOP response
+        mock_event_data = json.dumps({"type": "TestEvent", "data": {"field": "value"}})
+        mock_redis.brpop.return_value = ("queue:task_123", mock_event_data.encode())
+
+        result = queue.dequeue_event(no_wait=False)
+
+        assert result == {"field": "value"}
+        mock_redis.brpop.assert_called_once_with("queue:task_123", timeout=1)
+
+    def test_dequeue_event_blocking_timeout(self, mock_redis):
+        """Test dequeueing with blocking timeout."""
+        queue = RedisEventQueue(mock_redis, "task_123")
+        mock_redis.brpop.return_value = None
+
+        with pytest.raises(RuntimeError, match="No events available"):
+            queue.dequeue_event(no_wait=False)
+
+    def test_dequeue_event_closed_queue(self, mock_redis):
+        """Test dequeueing from closed queue raises error."""
+        queue = RedisEventQueue(mock_redis, "task_123")
+        queue.close()
+
+        with pytest.raises(RuntimeError, match="Cannot dequeue from closed queue"):
+            queue.dequeue_event()
+
+    def test_close_queue(self, mock_redis):
+        """Test closing queue."""
+        queue = RedisEventQueue(mock_redis, "task_123")
+        assert not queue.is_closed()
+
+        queue.close()
+        assert queue.is_closed()
+
+    def test_tap_queue(self, mock_redis):
+        """Test creating a tap of the queue."""
+        queue = RedisEventQueue(mock_redis, "task_123", prefix="test:")
+        tap = queue.tap()
+
+        assert isinstance(tap, RedisEventQueue)
+        assert tap.task_id == "task_123"
+        assert tap.prefix == "test:"
+        assert tap.redis == mock_redis
+        assert not tap.is_closed()
+
+    def test_task_done(self, mock_redis):
+        """Test task_done method (no-op for Redis)."""
+        queue = RedisEventQueue(mock_redis, "task_123")
+        queue.task_done()  # Should not raise any errors
 
 
 class TestRedisQueueManager:
     """Tests for RedisQueueManager."""
-    
+
     def test_init(self, mock_redis):
         """Test RedisQueueManager initialization."""
-        with patch.object(RedisQueueManager, '_ensure_consumer_group'):
-            manager = RedisQueueManager(
-                mock_redis,
-                stream_name="test_stream",
-                consumer_group="test_group",
-                max_len=1000
-            )
-            assert manager.redis == mock_redis
-            assert manager.stream_name == "test_stream"
-            assert manager.consumer_group == "test_group"
-            assert manager.max_len == 1000
-    
-    def test_ensure_consumer_group_success(self, mock_redis):
-        """Test consumer group creation success."""
-        mock_redis.xgroup_create.return_value = True
-        
-        with patch.object(RedisQueueManager, '_ensure_consumer_group', wraps=RedisQueueManager._ensure_consumer_group):
-            manager = RedisQueueManager(mock_redis)
-            manager._ensure_consumer_group()
-            
-            mock_redis.xgroup_create.assert_called_once_with(
-                "a2a:events", "a2a-agents", id="0", mkstream=True
-            )
-    
-    def test_ensure_consumer_group_already_exists(self, mock_redis):
-        """Test consumer group creation when group already exists."""
-        mock_redis.xgroup_create.side_effect = redis.ResponseError("BUSYGROUP")
-        
-        with patch.object(RedisQueueManager, '_ensure_consumer_group', wraps=RedisQueueManager._ensure_consumer_group):
-            manager = RedisQueueManager(mock_redis)
-            # Should not raise exception
-            manager._ensure_consumer_group()
-    
-    def test_serialize_event(self, mock_redis, sample_event_data):
-        """Test event serialization."""
-        with patch.object(RedisQueueManager, '_ensure_consumer_group'):
-            manager = RedisQueueManager(mock_redis)
-            
-            serialized = manager._serialize_event(sample_event_data)
-            
-            assert serialized["type"] == "task_created"
-            assert serialized["task_id"] == "task_123"
-            assert isinstance(serialized["data"], str)  # Should be JSON string
-            assert json.loads(serialized["data"]) == sample_event_data["data"]
-    
-    def test_deserialize_event(self, mock_redis):
-        """Test event deserialization."""
-        with patch.object(RedisQueueManager, '_ensure_consumer_group'):
-            manager = RedisQueueManager(mock_redis)
-            
-            # Mock Redis response format (bytes)
-            redis_data = {
-                b"type": b"task_created",
-                b"task_id": b"task_123",
-                b"data": b'{"status": "pending", "priority": "high"}'
-            }
-            
-            deserialized = manager._deserialize_event(redis_data)
-            
-            assert deserialized["type"] == "task_created"
-            assert deserialized["task_id"] == "task_123"
-            assert deserialized["data"] == {"status": "pending", "priority": "high"}
-    
-    def test_enqueue_simple(self, mock_redis, sample_event_data):
-        """Test enqueueing an event."""
-        mock_redis.xadd.return_value = b"1234567890-0"
-        
-        with patch.object(RedisQueueManager, '_ensure_consumer_group'):
-            manager = RedisQueueManager(mock_redis, max_len=None)
-            
-            event_id = manager.enqueue(sample_event_data)
-            
-            assert event_id == "1234567890-0"
-            mock_redis.xadd.assert_called_once()
-            call_args = mock_redis.xadd.call_args
-            assert call_args[0][0] == "a2a:events"  # stream name
-    
-    def test_enqueue_with_maxlen(self, mock_redis, sample_event_data):
-        """Test enqueueing with max length trimming."""
-        mock_redis.xadd.return_value = b"1234567890-0"
-        
-        with patch.object(RedisQueueManager, '_ensure_consumer_group'):
-            manager = RedisQueueManager(mock_redis, max_len=1000)
-            
-            event_id = manager.enqueue(sample_event_data)
-            
-            assert event_id == "1234567890-0"
-            mock_redis.xadd.assert_called_once()
-            call_args = mock_redis.xadd.call_args
-            assert call_args[1]["maxlen"] == 1000
-            assert call_args[1]["approximate"] is True
-    
-    def test_dequeue_success(self, mock_redis):
-        """Test successful event dequeuing."""
-        # Mock Redis XREADGROUP response
-        mock_redis.xreadgroup.return_value = [
-            (b"a2a:events", [
-                (b"1234567890-0", {b"type": b"task_created", b"task_id": b"task_123"}),
-                (b"1234567890-1", {b"type": b"task_updated", b"task_id": b"task_456"})
-            ])
-        ]
-        
-        with patch.object(RedisQueueManager, '_ensure_consumer_group'):
-            manager = RedisQueueManager(mock_redis)
-            
-            events = manager.dequeue("consumer1", count=2, block=1000)
-            
-            assert len(events) == 2
-            assert events[0][0] == "1234567890-0"
-            assert events[0][1]["type"] == "task_created"
-            assert events[1][0] == "1234567890-1"
-            assert events[1][1]["type"] == "task_updated"
-            
-            mock_redis.xreadgroup.assert_called_once_with(
-                "a2a-agents", "consumer1", {"a2a:events": ">"}, count=2, block=1000
-            )
-    
-    def test_dequeue_no_messages(self, mock_redis):
-        """Test dequeuing when no messages available."""
-        mock_redis.xreadgroup.return_value = []
-        
-        with patch.object(RedisQueueManager, '_ensure_consumer_group'):
-            manager = RedisQueueManager(mock_redis)
-            
-            events = manager.dequeue("consumer1")
-            
-            assert events == []
-    
-    def test_dequeue_with_auto_claim(self, mock_redis):
-        """Test dequeuing with auto-claim."""
-        # Mock auto-claim response
-        mock_redis.xautoclaim.return_value = [
-            None,  # next_id
-            [(b"1234567890-0", {b"type": b"task_created", b"task_id": b"task_123"})]
-        ]
-        mock_redis.xreadgroup.return_value = []  # No new messages
-        
-        with patch.object(RedisQueueManager, '_ensure_consumer_group'):
-            manager = RedisQueueManager(mock_redis)
-            
-            events = manager.dequeue("consumer1", auto_claim_min_idle=30000)
-            
-            assert len(events) == 1
-            assert events[0][0] == "1234567890-0"
-            assert events[0][1]["type"] == "task_created"
-            
-            mock_redis.xautoclaim.assert_called_once()
-    
-    def test_dequeue_nogroup_error(self, mock_redis):
-        """Test dequeuing when consumer group doesn't exist."""
-        mock_redis.xreadgroup.side_effect = [
-            redis.ResponseError("NOGROUP"),
-            []  # Second call after group creation
-        ]
-        
-        with patch.object(RedisQueueManager, '_ensure_consumer_group') as mock_ensure:
-            manager = RedisQueueManager(mock_redis)
-            mock_ensure.reset_mock()  # Reset call from __init__
-            
-            events = manager.dequeue("consumer1")
-            
-            assert events == []
-            assert mock_ensure.call_count == 1  # Called once to recreate group
-    
-    def test_ack_success(self, mock_redis):
-        """Test acknowledging events."""
-        mock_redis.xack.return_value = 2
-        
-        with patch.object(RedisQueueManager, '_ensure_consumer_group'):
-            manager = RedisQueueManager(mock_redis)
-            
-            result = manager.ack("consumer1", ["1234567890-0", "1234567890-1"])
-            
-            assert result == 2
-            mock_redis.xack.assert_called_once_with(
-                "a2a:events", "a2a-agents", "1234567890-0", "1234567890-1"
-            )
-    
-    def test_ack_empty_list(self, mock_redis):
-        """Test acknowledging empty event list."""
-        with patch.object(RedisQueueManager, '_ensure_consumer_group'):
-            manager = RedisQueueManager(mock_redis)
-            
-            result = manager.ack("consumer1", [])
-            
-            assert result == 0
-            mock_redis.xack.assert_not_called()
-    
-    def test_pending_count_specific_consumer(self, mock_redis):
-        """Test getting pending count for specific consumer."""
-        mock_redis.xpending_range.return_value = [
-            ("msg1", "consumer1", 1000, 1),
-            ("msg2", "consumer1", 2000, 1)
-        ]
-        
-        with patch.object(RedisQueueManager, '_ensure_consumer_group'):
-            manager = RedisQueueManager(mock_redis)
-            
-            count = manager.pending_count("consumer1")
-            
-            assert count == 2
-            mock_redis.xpending_range.assert_called_once()
-    
-    def test_pending_count_all_consumers(self, mock_redis):
-        """Test getting pending count for all consumers."""
-        mock_redis.xpending.return_value = {"pending": 5}
-        
-        with patch.object(RedisQueueManager, '_ensure_consumer_group'):
-            manager = RedisQueueManager(mock_redis)
-            
-            count = manager.pending_count()
-            
-            assert count == 5
-            mock_redis.xpending.assert_called_once()
-    
-    def test_get_consumer_info(self, mock_redis):
-        """Test getting consumer information."""
-        mock_redis.xinfo_consumers.return_value = [
-            {b"name": b"consumer1", b"pending": 2, b"idle": 1000},
-            {b"name": b"consumer2", b"pending": 0, b"idle": 5000}
-        ]
-        
-        with patch.object(RedisQueueManager, '_ensure_consumer_group'):
-            manager = RedisQueueManager(mock_redis)
-            
-            info = manager.get_consumer_info()
-            
-            assert len(info) == 2
-            assert info[0]["name"] == "consumer1"
-            assert info[0]["pending"] == 2
-            assert info[1]["name"] == "consumer2"
-            assert info[1]["idle"] == 5000
-    
-    def test_trim_stream(self, mock_redis):
-        """Test stream trimming."""
-        with patch.object(RedisQueueManager, '_ensure_consumer_group'):
-            manager = RedisQueueManager(mock_redis, max_len=1000)
-            
-            manager.trim_stream()
-            
-            mock_redis.xtrim.assert_called_once_with(
-                "a2a:events", maxlen=1000, approximate=True
-            )
-    
-    def test_delete_consumer(self, mock_redis):
-        """Test consumer deletion."""
-        mock_redis.xgroup_delconsumer.return_value = 1
-        
-        with patch.object(RedisQueueManager, '_ensure_consumer_group'):
-            manager = RedisQueueManager(mock_redis)
-            
-            result = manager.delete_consumer("consumer1")
-            
-            assert result is True
-            mock_redis.xgroup_delconsumer.assert_called_once_with(
-                "a2a:events", "a2a-agents", "consumer1"
-            )
-    
-    def test_get_stream_info(self, mock_redis):
-        """Test getting stream information."""
-        mock_redis.xinfo_stream.return_value = {
-            b"length": 100,
-            b"first-entry": [b"1234567890-0", {b"field": b"value"}],
-            b"last-entry": [b"1234567899-0", {b"field": b"value2"}],
-            b"groups": 1
-        }
-        
-        with patch.object(RedisQueueManager, '_ensure_consumer_group'):
-            manager = RedisQueueManager(mock_redis)
-            
-            info = manager.get_stream_info()
-            
-            assert info["length"] == 100
-            assert info["groups"] == 1
+        manager = RedisQueueManager(mock_redis, prefix="test:")
+        assert manager.redis == mock_redis
+        assert manager.prefix == "test:"
+        assert manager._queues == {}
+
+    @pytest.mark.asyncio
+    async def test_add_queue(self, mock_redis):
+        """Test adding a queue."""
+        manager = RedisQueueManager(mock_redis)
+        mock_queue = MagicMock()
+
+        await manager.add("task_123", mock_queue)
+
+        assert "task_123" in manager._queues
+        assert isinstance(manager._queues["task_123"], RedisEventQueue)
+
+    @pytest.mark.asyncio
+    async def test_create_or_tap_new_queue(self, mock_redis):
+        """Test creating a new queue."""
+        manager = RedisQueueManager(mock_redis)
+
+        queue = await manager.create_or_tap("task_123")
+
+        assert isinstance(queue, RedisEventQueue)
+        assert queue.task_id == "task_123"
+        assert "task_123" in manager._queues
+
+    @pytest.mark.asyncio
+    async def test_create_or_tap_existing_queue(self, mock_redis):
+        """Test getting existing queue."""
+        manager = RedisQueueManager(mock_redis)
+
+        # Create queue first
+        queue1 = await manager.create_or_tap("task_123")
+        queue2 = await manager.create_or_tap("task_123")
+
+        assert queue1 is queue2  # Should return same instance
+
+    @pytest.mark.asyncio
+    async def test_get_existing_queue(self, mock_redis):
+        """Test getting existing queue."""
+        manager = RedisQueueManager(mock_redis)
+
+        # Create queue first
+        await manager.create_or_tap("task_123")
+        queue = await manager.get("task_123")
+
+        assert isinstance(queue, RedisEventQueue)
+        assert queue.task_id == "task_123"
+
+    @pytest.mark.asyncio
+    async def test_get_nonexistent_queue(self, mock_redis):
+        """Test getting non-existent queue."""
+        manager = RedisQueueManager(mock_redis)
+
+        queue = await manager.get("nonexistent")
+
+        assert queue is None
+
+    @pytest.mark.asyncio
+    async def test_tap_existing_queue(self, mock_redis):
+        """Test tapping existing queue."""
+        manager = RedisQueueManager(mock_redis)
+
+        # Create queue first
+        await manager.create_or_tap("task_123")
+        tap = await manager.tap("task_123")
+
+        assert isinstance(tap, RedisEventQueue)
+        assert tap.task_id == "task_123"
+
+    @pytest.mark.asyncio
+    async def test_tap_nonexistent_queue(self, mock_redis):
+        """Test tapping non-existent queue."""
+        manager = RedisQueueManager(mock_redis)
+
+        tap = await manager.tap("nonexistent")
+
+        assert tap is None
+
+    @pytest.mark.asyncio
+    async def test_close_queue(self, mock_redis):
+        """Test closing a queue."""
+        manager = RedisQueueManager(mock_redis)
+
+        # Create queue first
+        await manager.create_or_tap("task_123")
+        assert "task_123" in manager._queues
+
+        await manager.close("task_123")
+
+        assert "task_123" not in manager._queues
+
+    @pytest.mark.asyncio
+    async def test_close_nonexistent_queue(self, mock_redis):
+        """Test closing non-existent queue."""
+        manager = RedisQueueManager(mock_redis)
+
+        # Should not raise error
+        await manager.close("nonexistent")
+
+        assert "nonexistent" not in manager._queues
 
 
 class TestRedisQueueManagerIntegration:
     """Integration tests for RedisQueueManager with real Redis."""
-    
-    def test_full_queue_lifecycle(self, queue_manager, sample_event_data):
+
+    @pytest.mark.asyncio
+    async def test_full_queue_lifecycle(self, redis_client):
         """Test complete queue lifecycle with real Redis."""
-        consumer_id = "test_consumer"
-        
-        # Enqueue events
-        event_id1 = queue_manager.enqueue(sample_event_data)
-        event_id2 = queue_manager.enqueue({
-            "type": "task_updated",
-            "task_id": "task_456",
-            "status": "completed"
-        })
-        
-        assert event_id1 is not None
-        assert event_id2 is not None
-        assert event_id1 != event_id2
-        
-        # Dequeue events
-        events = queue_manager.dequeue(consumer_id, count=5, block=100)
-        
-        assert len(events) == 2
-        event_ids = [event[0] for event in events]
-        assert event_id1 in event_ids
-        assert event_id2 in event_ids
-        
-        # Check event data
-        for event_id, event_data in events:
-            assert "type" in event_data
-            assert event_data["type"] in ["task_created", "task_updated"]
-        
-        # Acknowledge events
-        ack_count = queue_manager.ack(consumer_id, event_ids)
-        assert ack_count == 2
-        
-        # No more events should be available
-        more_events = queue_manager.dequeue(consumer_id, count=1, block=100)
-        assert len(more_events) == 0
-    
-    def test_consumer_groups(self, redis_client, sample_event_data):
-        """Test multiple consumers in the same group."""
-        manager = RedisQueueManager(
-            redis_client,
-            stream_name="test_multi_consumer",
-            consumer_group="test_group"
-        )
-        
-        # Enqueue events
-        for i in range(5):
-            manager.enqueue({**sample_event_data, "sequence": i})
-        
-        # Two consumers read from the same group
-        consumer1_events = manager.dequeue("consumer1", count=3, block=100)
-        consumer2_events = manager.dequeue("consumer2", count=3, block=100)
-        
-        # Each consumer should get different events
-        total_events = len(consumer1_events) + len(consumer2_events)
-        assert total_events == 5
-        
-        # Get all event IDs
-        all_event_ids = [e[0] for e in consumer1_events + consumer2_events]
-        assert len(set(all_event_ids)) == 5  # All unique
-        
-        # Acknowledge events
-        if consumer1_events:
-            manager.ack("consumer1", [e[0] for e in consumer1_events])
-        if consumer2_events:
-            manager.ack("consumer2", [e[0] for e in consumer2_events])
+        manager = RedisQueueManager(redis_client, prefix="test_queue:")
+        task_id = "integration_test"
+
+        # Create queue
+        queue = await manager.create_or_tap(task_id)
+        assert isinstance(queue, RedisEventQueue)
+
+        # Enqueue event
+        test_event = {"type": "test", "message": "Hello Redis!"}
+        queue.enqueue_event(test_event)
+
+        # Dequeue event
+        retrieved_event = queue.dequeue_event(no_wait=True)
+        assert retrieved_event == test_event
+
+        # Close queue
+        await manager.close(task_id)
+        assert await manager.get(task_id) is None
+
+    @pytest.mark.asyncio
+    async def test_queue_persistence(self, redis_client):
+        """Test that events persist in Redis."""
+        manager1 = RedisQueueManager(redis_client, prefix="persist_test:")
+        task_id = "persist_task"
+
+        # Create queue and enqueue event
+        queue1 = await manager1.create_or_tap(task_id)
+        test_event = {"message": "Persistent event"}
+        queue1.enqueue_event(test_event)
+
+        # Create new manager instance (simulating restart)
+        manager2 = RedisQueueManager(redis_client, prefix="persist_test:")
+        queue2 = await manager2.create_or_tap(task_id)
+
+        # Event should still be there
+        retrieved_event = queue2.dequeue_event(no_wait=True)
+        assert retrieved_event == test_event
+
+        # Cleanup
+        await manager2.close(task_id)

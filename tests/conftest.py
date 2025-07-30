@@ -4,7 +4,11 @@ import pytest
 import redis
 from unittest.mock import MagicMock
 
-from a2a_redis import RedisTaskStore, RedisQueueManager, RedisPushNotificationConfigStore
+from a2a_redis import (
+    RedisTaskStore,
+    RedisQueueManager,
+    RedisPushNotificationConfigStore,
+)
 
 
 @pytest.fixture
@@ -18,7 +22,7 @@ def mock_redis():
 def redis_client():
     """Real Redis client for integration tests."""
     try:
-        client = redis.Redis(host='localhost', port=6379, db=15, decode_responses=False)
+        client = redis.Redis(host="localhost", port=6379, db=15, decode_responses=False)
         client.ping()
         # Clean the test database
         client.flushdb()
@@ -40,9 +44,7 @@ def task_store(redis_client):
 def queue_manager(redis_client):
     """RedisQueueManager instance for testing."""
     return RedisQueueManager(
-        redis_client,
-        stream_name="test_stream",
-        consumer_group="test_group"
+        redis_client, stream_name="test_stream", consumer_group="test_group"
     )
 
 
@@ -62,9 +64,9 @@ def sample_task_data():
         "metadata": {
             "user_id": "user_456",
             "priority": "high",
-            "tags": ["test", "sample"]
+            "tags": ["test", "sample"],
         },
-        "created_at": "2024-01-01T00:00:00Z"
+        "created_at": "2024-01-01T00:00:00Z",
     }
 
 
@@ -76,10 +78,7 @@ def sample_event_data():
         "task_id": "task_123",
         "agent_id": "agent_456",
         "timestamp": "2024-01-01T00:00:00Z",
-        "data": {
-            "status": "pending",
-            "priority": "high"
-        }
+        "data": {"status": "pending", "priority": "high"},
     }
 
 
@@ -93,6 +92,6 @@ def sample_push_config():
         "preferences": {
             "task_updates": True,
             "reminders": False,
-            "daily_summary": True
-        }
+            "daily_summary": True,
+        },
     }

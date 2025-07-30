@@ -1,276 +1,170 @@
-"""Redis Streams-backed queue manager implementation for the A2A Python SDK."""
+"""Redis-backed queue manager implementation for the A2A Python SDK."""
 
 import json
-import time
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Dict, Optional, Any, Union, cast
 
 import redis
 from a2a.server.events.queue_manager import QueueManager
+from a2a.server.events.event_queue import EventQueue
+from a2a.types import Message, Task, TaskStatusUpdateEvent, TaskArtifactUpdateEvent
+
+
+class RedisEventQueue(EventQueue):
+    """Redis-backed implementation of EventQueue using Redis Lists."""
+
+    def __init__(self, redis_client: redis.Redis, task_id: str, prefix: str = "queue:"):
+        """Initialize Redis event queue.
+
+        Args:
+            redis_client: Redis client instance
+            task_id: Task identifier this queue is for
+            prefix: Key prefix for queue storage
+        """
+        self.redis = redis_client
+        self.task_id = task_id
+        self.prefix = prefix
+        self._closed = False
+        self._queue_key = f"{prefix}{task_id}"
+
+    async def enqueue_event(
+        self,
+        event: Union[Message, Task, TaskStatusUpdateEvent, TaskArtifactUpdateEvent],
+    ) -> None:
+        """Add an event to the queue."""
+        if self._closed:
+            raise RuntimeError("Cannot enqueue to closed queue")
+
+        # Serialize event - convert to dict if it has model_dump, otherwise assume it's serializable
+        if hasattr(event, "model_dump"):
+            event_data = event.model_dump()
+        else:
+            event_data = event
+
+        serialized_event = json.dumps(
+            {"type": type(event).__name__, "data": event_data}
+        )
+
+        # Push to Redis list (LPUSH for FIFO with BRPOP)
+        self.redis.lpush(self._queue_key, serialized_event)
+
+    async def dequeue_event(
+        self, no_wait: bool = False
+    ) -> Union[Message, Task, TaskStatusUpdateEvent, TaskArtifactUpdateEvent]:
+        """Remove and return an event from the queue."""
+        if self._closed:
+            raise RuntimeError("Cannot dequeue from closed queue")
+
+        result: Optional[bytes] = None
+
+        if no_wait:
+            # Non-blocking pop
+            result = cast(Optional[bytes], self.redis.rpop(self._queue_key))  # type: ignore[misc]
+            if result is None:
+                raise RuntimeError("No events available")
+        else:
+            # Blocking pop with 1 second timeout
+            brpop_result = cast(Any, self.redis.brpop([self._queue_key], timeout=1))  # type: ignore[misc]
+            if brpop_result is None:
+                raise RuntimeError("No events available")
+            result = brpop_result[1]  # brpop returns (key, value)
+
+        # Deserialize event
+        if result is None:
+            raise RuntimeError("No events available")
+
+        result_str = result.decode()
+        event_data = json.loads(result_str)
+
+        # For now, return the data dict - in a real implementation you'd reconstruct the proper type
+        return event_data["data"]
+
+    async def close(self) -> None:
+        """Close the queue."""
+        self._closed = True
+        # Optionally clean up the Redis key
+        # self.redis.delete(self._queue_key)
+
+    def is_closed(self) -> bool:
+        """Check if the queue is closed."""
+        return self._closed
+
+    def tap(self) -> "EventQueue":
+        """Create a tap (copy) of this queue."""
+        # Create a new queue that shares the same Redis key
+        return RedisEventQueue(self.redis, self.task_id, self.prefix)
+
+    def task_done(self) -> None:
+        """Mark a task as done (for compatibility)."""
+        pass  # Redis doesn't need explicit task_done like Python's queue.Queue
 
 
 class RedisQueueManager(QueueManager):
-    """Redis Streams-backed implementation of the A2A QueueManager interface."""
-    
-    def __init__(
-        self,
-        redis_client: redis.Redis,
-        stream_name: str = "a2a:events",
-        consumer_group: str = "a2a-agents",
-        max_len: Optional[int] = 10000,
-        trim_strategy: str = "maxlen"
-    ):
+    """Redis-backed implementation of the A2A QueueManager interface."""
+
+    def __init__(self, redis_client: redis.Redis, prefix: str = "queue:"):
         """Initialize the Redis queue manager.
-        
+
         Args:
             redis_client: Redis client instance
-            stream_name: Name of the Redis stream
-            consumer_group: Consumer group name for agents
-            max_len: Maximum stream length (None for unlimited)
-            trim_strategy: Stream trimming strategy ('maxlen' or 'minid')
+            prefix: Key prefix for queue storage
         """
         self.redis = redis_client
-        self.stream_name = stream_name
-        self.consumer_group = consumer_group
-        self.max_len = max_len
-        self.trim_strategy = trim_strategy
-        
-        # Initialize consumer group if it doesn't exist
-        self._ensure_consumer_group()
-    
-    def _ensure_consumer_group(self) -> None:
-        """Ensure the consumer group exists."""
-        try:
-            self.redis.xgroup_create(
-                self.stream_name,
-                self.consumer_group,
-                id="0",
-                mkstream=True
-            )
-        except redis.ResponseError as e:
-            # Group already exists
-            if "BUSYGROUP" not in str(e):
-                raise
-    
-    def _serialize_event(self, event: Dict[str, Any]) -> Dict[str, str]:
-        """Serialize event data for Redis storage."""
-        serialized = {}
-        for key, value in event.items():
-            if isinstance(value, (dict, list)):
-                serialized[key] = json.dumps(value)
-            else:
-                serialized[key] = str(value)
-        return serialized
-    
-    def _deserialize_event(self, event_data: Dict[bytes, bytes]) -> Dict[str, Any]:
-        """Deserialize event data from Redis."""
-        result = {}
-        for key, value in event_data.items():
-            key_str = key.decode() if isinstance(key, bytes) else key
-            value_str = value.decode() if isinstance(value, bytes) else value
-            
-            # Try to deserialize JSON data
-            try:
-                result[key_str] = json.loads(value_str)
-            except json.JSONDecodeError:
-                result[key_str] = value_str
-        
-        return result
-    
-    def enqueue(self, event: Dict[str, Any]) -> str:
-        """Add an event to the queue.
-        
+        self.prefix = prefix
+        self._queues: Dict[str, RedisEventQueue] = {}
+
+    async def add(self, task_id: str, queue: EventQueue) -> None:
+        """Add a queue for a task (a2a-sdk interface).
+
         Args:
-            event: Event data dictionary
-            
-        Returns:
-            Event ID generated by Redis
+            task_id: Task identifier
+            queue: EventQueue instance to add
         """
-        serialized_event = self._serialize_event(event)
-        
-        # Add timestamp if not present
-        if "timestamp" not in serialized_event:
-            serialized_event["timestamp"] = str(int(time.time() * 1000))
-        
-        # Add to stream with optional trimming
-        if self.max_len:
-            event_id = self.redis.xadd(
-                self.stream_name,
-                serialized_event,
-                maxlen=self.max_len,
-                approximate=True
-            )
-        else:
-            event_id = self.redis.xadd(self.stream_name, serialized_event)
-        
-        return event_id.decode() if isinstance(event_id, bytes) else event_id
-    
-    def dequeue(
-        self,
-        consumer_id: str,
-        count: int = 1,
-        block: int = 0,
-        auto_claim_min_idle: Optional[int] = None
-    ) -> List[Tuple[str, Dict[str, Any]]]:
-        """Read events from the queue for a specific consumer.
-        
+        # For Redis implementation, we create our own queue but this maintains interface
+        self._queues[task_id] = RedisEventQueue(self.redis, task_id, self.prefix)
+
+    async def close(self, task_id: str) -> None:
+        """Close a queue for a task (a2a-sdk interface).
+
         Args:
-            consumer_id: Unique identifier for the consumer
-            count: Maximum number of events to read
-            block: Block for this many milliseconds (0 = don't block)
-            auto_claim_min_idle: Auto-claim messages idle for this many ms
-            
-        Returns:
-            List of (event_id, event_data) tuples
+            task_id: Task identifier
         """
-        # Auto-claim pending messages if specified
-        if auto_claim_min_idle:
-            try:
-                claimed = self.redis.xautoclaim(
-                    self.stream_name,
-                    self.consumer_group,
-                    consumer_id,
-                    min_idle_time=auto_claim_min_idle,
-                    count=count
-                )
-                if claimed and claimed[1]:  # claimed[1] contains the messages
-                    return [
-                        (msg_id.decode(), self._deserialize_event(fields))
-                        for msg_id, fields in claimed[1]
-                    ]
-            except redis.ResponseError:
-                # Auto-claim not supported or failed, continue with normal read
-                pass
-        
-        # Read new messages
-        try:
-            messages = self.redis.xreadgroup(
-                self.consumer_group,
-                consumer_id,
-                {self.stream_name: ">"},
-                count=count,
-                block=block
-            )
-            
-            if not messages:
-                return []
-            
-            # Extract messages from the response
-            result = []
-            for stream, msgs in messages:
-                for msg_id, fields in msgs:
-                    event_id = msg_id.decode() if isinstance(msg_id, bytes) else msg_id
-                    event_data = self._deserialize_event(fields)
-                    result.append((event_id, event_data))
-            
-            return result
-            
-        except redis.ResponseError as e:
-            if "NOGROUP" in str(e):
-                self._ensure_consumer_group()
-                return self.dequeue(consumer_id, count, block, auto_claim_min_idle)
-            raise
-    
-    def ack(self, consumer_id: str, event_ids: List[str]) -> int:
-        """Acknowledge processing of events.
-        
+        if task_id in self._queues:
+            await self._queues[task_id].close()
+            del self._queues[task_id]
+
+    async def create_or_tap(self, task_id: str) -> EventQueue:
+        """Create or get existing queue for a task (a2a-sdk interface).
+
         Args:
-            consumer_id: Consumer that processed the events
-            event_ids: List of event IDs to acknowledge
-            
+            task_id: Task identifier
+
         Returns:
-            Number of messages acknowledged
+            EventQueue instance for the task
         """
-        if not event_ids:
-            return 0
-        
-        return self.redis.xack(self.stream_name, self.consumer_group, *event_ids)
-    
-    def pending_count(self, consumer_id: Optional[str] = None) -> int:
-        """Get count of pending messages.
-        
+        if task_id not in self._queues:
+            self._queues[task_id] = RedisEventQueue(self.redis, task_id, self.prefix)
+        return self._queues[task_id]
+
+    async def get(self, task_id: str) -> Optional[EventQueue]:
+        """Get existing queue for a task (a2a-sdk interface).
+
         Args:
-            consumer_id: Specific consumer ID, or None for all consumers
-            
+            task_id: Task identifier
+
         Returns:
-            Number of pending messages
+            EventQueue instance or None if not found
         """
-        try:
-            if consumer_id:
-                pending = self.redis.xpending_range(
-                    self.stream_name,
-                    self.consumer_group,
-                    min="-",
-                    max="+",
-                    count=1
-                )
-                return len(pending)
-            else:
-                pending_info = self.redis.xpending(self.stream_name, self.consumer_group)
-                return pending_info["pending"]
-        except redis.ResponseError:
-            return 0
-    
-    def get_consumer_info(self) -> List[Dict[str, Any]]:
-        """Get information about consumers in the group.
-        
-        Returns:
-            List of consumer information dictionaries
-        """
-        try:
-            consumers = self.redis.xinfo_consumers(self.stream_name, self.consumer_group)
-            return [
-                {
-                    "name": consumer[b"name"].decode(),
-                    "pending": consumer[b"pending"],
-                    "idle": consumer[b"idle"]
-                }
-                for consumer in consumers
-            ]
-        except redis.ResponseError:
-            return []
-    
-    def trim_stream(self, max_len: Optional[int] = None) -> None:
-        """Manually trim the stream to manage memory usage.
-        
+        return self._queues.get(task_id)
+
+    async def tap(self, task_id: str) -> Optional[EventQueue]:
+        """Create a tap of existing queue for a task (a2a-sdk interface).
+
         Args:
-            max_len: Maximum length to trim to (uses instance default if None)
-        """
-        trim_len = max_len or self.max_len
-        if trim_len:
-            self.redis.xtrim(self.stream_name, maxlen=trim_len, approximate=True)
-    
-    def delete_consumer(self, consumer_id: str) -> bool:
-        """Delete a consumer from the consumer group.
-        
-        Args:
-            consumer_id: Consumer ID to delete
-            
+            task_id: Task identifier
+
         Returns:
-            True if consumer was deleted, False otherwise
+            EventQueue tap or None if queue doesn't exist
         """
-        try:
-            result = self.redis.xgroup_delconsumer(
-                self.stream_name,
-                self.consumer_group,
-                consumer_id
-            )
-            return bool(result)
-        except redis.ResponseError:
-            return False
-    
-    def get_stream_info(self) -> Dict[str, Any]:
-        """Get information about the stream.
-        
-        Returns:
-            Stream information dictionary
-        """
-        try:
-            info = self.redis.xinfo_stream(self.stream_name)
-            return {
-                "length": info[b"length"],
-                "first_entry": info[b"first-entry"],
-                "last_entry": info[b"last-entry"],
-                "groups": info[b"groups"]
-            }
-        except redis.ResponseError:
-            return {}
+        if task_id in self._queues:
+            return self._queues[task_id].tap()
+        return None

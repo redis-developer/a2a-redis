@@ -1,268 +1,91 @@
 """Redis-backed push notification config store implementation for the A2A Python SDK."""
 
 import json
-from typing import Any, Dict, List, Optional
+from typing import List, Optional, Dict
 
 import redis
 from a2a.server.tasks.push_notification_config_store import PushNotificationConfigStore
+from a2a.types import PushNotificationConfig
 
 
 class RedisPushNotificationConfigStore(PushNotificationConfigStore):
     """Redis-backed implementation of the A2A PushNotificationConfigStore interface."""
-    
+
     def __init__(self, redis_client: redis.Redis, prefix: str = "push_config:"):
         """Initialize the Redis push notification config store.
-        
+
         Args:
             redis_client: Redis client instance
             prefix: Key prefix for config storage
         """
         self.redis = redis_client
         self.prefix = prefix
-    
-    def _config_key(self, agent_id: str, user_id: str) -> str:
-        """Generate the Redis key for a push notification config."""
-        return f"{self.prefix}{agent_id}:{user_id}"
-    
-    def _agent_pattern(self, agent_id: str) -> str:
-        """Generate the pattern for all configs for an agent."""
-        return f"{self.prefix}{agent_id}:*"
-    
-    def _serialize_config(self, config: Dict[str, Any]) -> Dict[str, str]:
-        """Serialize config data for Redis storage."""
-        serialized = {}
-        for key, value in config.items():
-            if isinstance(value, (dict, list)):
-                serialized[key] = json.dumps(value)
-            else:
-                serialized[key] = str(value)
-        return serialized
-    
-    def _deserialize_config(self, config_data: Dict[bytes, bytes]) -> Dict[str, Any]:
-        """Deserialize config data from Redis."""
-        if not config_data:
-            return {}
-        
-        result = {}
-        for key, value in config_data.items():
-            key_str = key.decode() if isinstance(key, bytes) else key
-            value_str = value.decode() if isinstance(value, bytes) else value
-            
-            # Try to deserialize JSON data
+
+    def _task_key(self, task_id: str) -> str:
+        """Generate the Redis key for task push notification configs."""
+        return f"{self.prefix}{task_id}"
+
+    async def get_info(self, task_id: str) -> List[PushNotificationConfig]:
+        """Get push notification configs for a task (a2a-sdk interface).
+
+        Args:
+            task_id: Task identifier
+
+        Returns:
+            List of PushNotificationConfig objects
+        """
+        configs_data: Dict[bytes, bytes] = self.redis.hgetall(self._task_key(task_id))  # type: ignore[assignment]
+        if not configs_data:
+            return []
+
+        configs: List[PushNotificationConfig] = []
+        for config_id_bytes, config_json_bytes in configs_data.items():
+            config_id = config_id_bytes.decode()
+            config_json = config_json_bytes.decode()
+
             try:
-                result[key_str] = json.loads(value_str)
-            except json.JSONDecodeError:
-                result[key_str] = value_str
-        
-        return result
-    
-    def create_config(
-        self,
-        agent_id: str,
-        user_id: str,
-        config: Dict[str, Any]
+                config_data = json.loads(config_json)
+                # Add the config_id to the data
+                config_data["id"] = config_id
+                config = PushNotificationConfig(**config_data)
+                configs.append(config)
+            except (json.JSONDecodeError, TypeError, ValueError):
+                # Skip invalid configs
+                continue
+
+        return configs
+
+    async def set_info(
+        self, task_id: str, notification_config: PushNotificationConfig
     ) -> None:
-        """Create a new push notification config.
-        
+        """Set push notification config for a task (a2a-sdk interface).
+
         Args:
-            agent_id: Agent identifier
-            user_id: User identifier
-            config: Push notification configuration
+            task_id: Task identifier
+            notification_config: Push notification configuration
         """
-        serialized_config = self._serialize_config(config)
-        self.redis.hset(self._config_key(agent_id, user_id), mapping=serialized_config)
-    
-    def get_config(
-        self,
-        agent_id: str,
-        user_id: str
-    ) -> Optional[Dict[str, Any]]:
-        """Retrieve a push notification config.
-        
+        # Use config id as the field name, or generate one if not provided
+        current_configs = await self.get_info(task_id)
+        config_id = notification_config.id or f"config_{len(current_configs)}"
+
+        # Serialize the config (exclude id from the stored data since it's the key)
+        config_data = notification_config.model_dump()
+        if "id" in config_data:
+            del config_data["id"]
+
+        config_json = json.dumps(config_data)
+        self.redis.hset(self._task_key(task_id), config_id, config_json)  # type: ignore[misc]
+
+    async def delete_info(self, task_id: str, config_id: Optional[str] = None) -> None:
+        """Delete push notification config(s) for a task (a2a-sdk interface).
+
         Args:
-            agent_id: Agent identifier
-            user_id: User identifier
-            
-        Returns:
-            Configuration dictionary or None if not found
+            task_id: Task identifier
+            config_id: Specific config ID to delete, or None to delete all configs
         """
-        config_data = self.redis.hgetall(self._config_key(agent_id, user_id))
-        if not config_data:
-            return None
-        
-        return self._deserialize_config(config_data)
-    
-    def update_config(
-        self,
-        agent_id: str,
-        user_id: str,
-        updates: Dict[str, Any]
-    ) -> bool:
-        """Update an existing push notification config.
-        
-        Args:
-            agent_id: Agent identifier
-            user_id: User identifier
-            updates: Dictionary of fields to update
-            
-        Returns:
-            True if config was updated, False if config doesn't exist
-        """
-        if not self.redis.exists(self._config_key(agent_id, user_id)):
-            return False
-        
-        serialized_updates = self._serialize_config(updates)
-        self.redis.hset(self._config_key(agent_id, user_id), mapping=serialized_updates)
-        return True
-    
-    def delete_config(self, agent_id: str, user_id: str) -> bool:
-        """Delete a push notification config.
-        
-        Args:
-            agent_id: Agent identifier
-            user_id: User identifier
-            
-        Returns:
-            True if config was deleted, False if config didn't exist
-        """
-        return bool(self.redis.delete(self._config_key(agent_id, user_id)))
-    
-    def list_configs_for_agent(self, agent_id: str) -> List[Dict[str, Any]]:
-        """List all push notification configs for an agent.
-        
-        Args:
-            agent_id: Agent identifier
-            
-        Returns:
-            List of configuration dictionaries with user_id included
-        """
-        pattern = self._agent_pattern(agent_id)
-        keys = self.redis.keys(pattern)
-        
-        configs = []
-        for key in keys:
-            key_str = key.decode() if isinstance(key, bytes) else key
-            # Extract user_id from key
-            user_id = key_str.replace(f"{self.prefix}{agent_id}:", "")
-            
-            config_data = self.redis.hgetall(key)
-            if config_data:
-                config = self._deserialize_config(config_data)
-                config["user_id"] = user_id
-                config["agent_id"] = agent_id
-                configs.append(config)
-        
-        return configs
-    
-    def list_configs_for_user(self, user_id: str) -> List[Dict[str, Any]]:
-        """List all push notification configs for a user across all agents.
-        
-        Args:
-            user_id: User identifier
-            
-        Returns:
-            List of configuration dictionaries with agent_id included
-        """
-        pattern = f"{self.prefix}*:{user_id}"
-        keys = self.redis.keys(pattern)
-        
-        configs = []
-        for key in keys:
-            key_str = key.decode() if isinstance(key, bytes) else key
-            # Extract agent_id from key
-            agent_id = key_str.replace(self.prefix, "").replace(f":{user_id}", "")
-            
-            config_data = self.redis.hgetall(key)
-            if config_data:
-                config = self._deserialize_config(config_data)
-                config["user_id"] = user_id
-                config["agent_id"] = agent_id
-                configs.append(config)
-        
-        return configs
-    
-    def config_exists(self, agent_id: str, user_id: str) -> bool:
-        """Check if a push notification config exists.
-        
-        Args:
-            agent_id: Agent identifier
-            user_id: User identifier
-            
-        Returns:
-            True if config exists, False otherwise
-        """
-        return bool(self.redis.exists(self._config_key(agent_id, user_id)))
-    
-    def get_users_for_agent(self, agent_id: str) -> List[str]:
-        """Get all user IDs that have push notification configs for an agent.
-        
-        Args:
-            agent_id: Agent identifier
-            
-        Returns:
-            List of user IDs
-        """
-        pattern = self._agent_pattern(agent_id)
-        keys = self.redis.keys(pattern)
-        
-        user_ids = []
-        for key in keys:
-            key_str = key.decode() if isinstance(key, bytes) else key
-            user_id = key_str.replace(f"{self.prefix}{agent_id}:", "")
-            user_ids.append(user_id)
-        
-        return user_ids
-    
-    def get_agents_for_user(self, user_id: str) -> List[str]:
-        """Get all agent IDs that have push notification configs for a user.
-        
-        Args:
-            user_id: User identifier
-            
-        Returns:
-            List of agent IDs
-        """
-        pattern = f"{self.prefix}*:{user_id}"
-        keys = self.redis.keys(pattern)
-        
-        agent_ids = []
-        for key in keys:
-            key_str = key.decode() if isinstance(key, bytes) else key
-            agent_id = key_str.replace(self.prefix, "").replace(f":{user_id}", "")
-            agent_ids.append(agent_id)
-        
-        return agent_ids
-    
-    def cleanup_configs_for_agent(self, agent_id: str) -> int:
-        """Remove all push notification configs for an agent.
-        
-        Args:
-            agent_id: Agent identifier
-            
-        Returns:
-            Number of configs deleted
-        """
-        pattern = self._agent_pattern(agent_id)
-        keys = self.redis.keys(pattern)
-        
-        if not keys:
-            return 0
-        
-        return self.redis.delete(*keys)
-    
-    def cleanup_configs_for_user(self, user_id: str) -> int:
-        """Remove all push notification configs for a user.
-        
-        Args:
-            user_id: User identifier
-            
-        Returns:
-            Number of configs deleted
-        """
-        pattern = f"{self.prefix}*:{user_id}"
-        keys = self.redis.keys(pattern)
-        
-        if not keys:
-            return 0
-        
-        return self.redis.delete(*keys)
+        if config_id:
+            # Delete specific config
+            self.redis.hdel(self._task_key(task_id), config_id)
+        else:
+            # Delete all configs for the task
+            self.redis.delete(self._task_key(task_id))
