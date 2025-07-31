@@ -2,6 +2,10 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+
+IMPORTANT: ALWAYS USE THE VIRTUALENV AT .venv WHEN RUNNING COMMANDS
+
+
 ## Development Environment
 
 This project uses **Redis 8** with all modules included (Search, JSON, etc.) as the backing store.

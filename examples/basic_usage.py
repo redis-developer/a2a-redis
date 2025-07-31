@@ -51,18 +51,20 @@ async def main():
 
     # Retrieve the task
     retrieved_task = await task_store.get(task_id)
-    print(f"Retrieved task: {retrieved_task.id} - {retrieved_task.status.state}")
-    print(f"  Metadata: {retrieved_task.metadata}")
+    if retrieved_task:
+        print(f"Retrieved task: {retrieved_task.id} - {retrieved_task.status.state}")
+        print(f"  Metadata: {retrieved_task.metadata}")
 
-    # Update the task
-    updates = {
-        "status": TaskStatus(state=TaskState.working),
-        "metadata": {**retrieved_task.metadata, "progress": 50},
-    }
-    await task_store.update_task(task_id, updates)
-    updated_task = await task_store.get(task_id)
-    print(f"Updated task: {updated_task.id} - {updated_task.status.state}")
-    print(f"  Progress: {updated_task.metadata.get('progress', 0)}%")
+        # Update the task
+        updates = {
+            "status": TaskStatus(state=TaskState.working),
+            "metadata": {**retrieved_task.metadata, "progress": 50},
+        }
+        await task_store.update_task(task_id, updates)
+        updated_task = await task_store.get(task_id)
+        if updated_task:
+            print(f"Updated task: {updated_task.id} - {updated_task.status.state}")
+            print(f"  Progress: {updated_task.metadata.get('progress', 0)}%")
 
     # List tasks
     all_task_ids = await task_store.list_task_ids()
@@ -77,26 +79,27 @@ async def main():
     await streams_manager.add(task_id, None)
     queue = await streams_manager.get(task_id)
 
-    # Enqueue some events
-    events_to_send = [
-        {"type": "task_created", "task_id": task_id, "user_id": "user123"},
-        {"type": "task_updated", "task_id": task_id, "status": "working"},
-        {"type": "notification", "message": "Hello from A2A Streams!"},
-    ]
+    if queue:
+        # Enqueue some events
+        events_to_send = [
+            {"type": "task_created", "task_id": task_id, "user_id": "user123"},
+            {"type": "task_updated", "task_id": task_id, "status": "working"},
+            {"type": "notification", "message": "Hello from A2A Streams!"},
+        ]
 
-    for event in events_to_send:
-        await queue.enqueue_event(event)
-        print(f"Enqueued to streams: {event}")
+        for event in events_to_send:
+            await queue.enqueue_event(event)
+            print(f"Enqueued to streams: {event}")
 
-    # Dequeue events (streams provide guaranteed delivery)
-    print("\nProcessing events from streams queue:")
-    for _ in range(len(events_to_send)):
-        try:
-            event_data = await queue.dequeue_event(no_wait=True)
-            print(f"Received from streams: {event_data}")
-        except RuntimeError:
-            print("No more events available in streams")
-            break
+        # Dequeue events (streams provide guaranteed delivery)
+        print("\nProcessing events from streams queue:")
+        for _ in range(len(events_to_send)):
+            try:
+                event_data = await queue.dequeue_event(no_wait=True)
+                print(f"Received from streams: {event_data}")
+            except RuntimeError:
+                print("No more events available in streams")
+                break
 
     print("\n=== RedisPubSubQueueManager Example ===")
 
@@ -107,36 +110,38 @@ async def main():
     await pubsub_manager.add(task_id, None)
     pubsub_queue = await pubsub_manager.get(task_id)
 
-    # Create a subscriber tap for broadcasting
-    subscriber = await pubsub_manager.tap(task_id)
+    if pubsub_queue:
+        # Create a subscriber tap for broadcasting
+        subscriber = await pubsub_manager.tap(task_id)
 
-    # Give the subscription time to establish
-    await asyncio.sleep(0.1)
+        if subscriber:
+            # Give the subscription time to establish
+            await asyncio.sleep(0.1)
 
-    # Enqueue real-time events
-    realtime_events = [
-        {"type": "status_update", "task_id": task_id, "status": "working"},
-        {"type": "progress_update", "task_id": task_id, "progress": 75},
-        {"type": "user_notification", "message": "Task is almost complete!"},
-    ]
+            # Enqueue real-time events
+            realtime_events = [
+                {"type": "status_update", "task_id": task_id, "status": "working"},
+                {"type": "progress_update", "task_id": task_id, "progress": 75},
+                {"type": "user_notification", "message": "Task is almost complete!"},
+            ]
 
-    for event in realtime_events:
-        await pubsub_queue.enqueue_event(event)
-        print(f"Published to pub/sub: {event}")
+            for event in realtime_events:
+                await pubsub_queue.enqueue_event(event)
+                print(f"Published to pub/sub: {event}")
 
-    # Brief pause for message propagation
-    await asyncio.sleep(0.1)
+            # Brief pause for message propagation
+            await asyncio.sleep(0.1)
 
-    # Try to receive messages (pub/sub is fire-and-forget)
-    print("\nAttempting to receive pub/sub events:")
-    for _ in range(len(realtime_events)):
-        try:
-            event_data = await subscriber.dequeue_event(no_wait=True)
-            print(f"Received from pub/sub: {event_data}")
-        except RuntimeError:
-            # This is expected in pub/sub if timing doesn't align
-            print("No events available (pub/sub timing)")
-            break
+            # Try to receive messages (pub/sub is fire-and-forget)
+            print("\nAttempting to receive pub/sub events:")
+            for _ in range(len(realtime_events)):
+                try:
+                    event_data = await subscriber.dequeue_event(no_wait=True)
+                    print(f"Received from pub/sub: {event_data}")
+                except RuntimeError:
+                    # This is expected in pub/sub if timing doesn't align
+                    print("No events available (pub/sub timing)")
+                    break
 
     print("\n=== RedisPushNotificationConfigStore Example ===")
 
@@ -151,31 +156,23 @@ async def main():
             id="travel_config",
             url="https://fcm.googleapis.com/fcm/send",
             token="fcm_token_123",
-            metadata={"agent_id": "travel_agent", "user_id": "user123"},
         ),
         PushNotificationConfig(
             id="weather_config",
             url="https://api.pushover.net/1/messages.json",
             token="pushover_token_456",
-            metadata={"agent_id": "weather_agent", "user_id": "user123"},
         ),
     ]
 
     for config in configs_to_create:
         await config_store.set_info(task_id, config)
-        agent_id = (
-            config.metadata.get("agent_id", "unknown") if config.metadata else "unknown"
-        )
-        print(f"Created push config for {agent_id}")
+        print(f"Created push config: {config.id}")
 
     # Retrieve configs
     stored_configs = await config_store.get_info(task_id)
     print(f"Retrieved {len(stored_configs)} push notification configs:")
     for config in stored_configs:
-        agent_id = (
-            config.metadata.get("agent_id", "unknown") if config.metadata else "unknown"
-        )
-        print(f"  - {agent_id} ({config.id}): {config.url}")
+        print(f"  - {config.id}: {config.url}")
 
     print("\n=== Direct Queue Usage Example ===")
 

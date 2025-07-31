@@ -408,7 +408,7 @@ class TestCreateRedisClient:
 
     def test_create_from_url(self):
         """Test creating client from URL."""
-        with patch("a2a_redis.utils.redis.from_url") as mock_from_url:
+        with patch("a2a_redis.utils.redis_async.from_url") as mock_from_url:
             create_redis_client(url="redis://localhost:6379/0")
 
             mock_from_url.assert_called_once_with(
@@ -421,7 +421,7 @@ class TestCreateRedisClient:
 
     def test_create_from_params(self):
         """Test creating client from parameters."""
-        with patch("a2a_redis.utils.redis.Redis") as mock_redis:
+        with patch("a2a_redis.utils.redis_async.Redis") as mock_redis:
             create_redis_client(
                 host="redis.example.com", port=6380, db=1, password="secret"
             )
@@ -441,7 +441,7 @@ class TestCreateRedisClient:
 
     def test_create_with_defaults(self):
         """Test creating client with default parameters."""
-        with patch("a2a_redis.utils.redis.Redis") as mock_redis:
+        with patch("a2a_redis.utils.redis_async.Redis") as mock_redis:
             create_redis_client()
 
             # Just check that Redis was called - the exact parameters may vary

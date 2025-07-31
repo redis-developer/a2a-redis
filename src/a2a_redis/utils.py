@@ -6,6 +6,7 @@ from functools import wraps
 from typing import Any, Callable, Optional, TypeVar, Union, Tuple, Dict, Type
 
 import redis
+import redis.asyncio as redis_async
 from redis.connection import ConnectionPool
 from redis.exceptions import ConnectionError, RedisError, TimeoutError
 
@@ -249,7 +250,7 @@ class RedisHealthMonitor:
         }
 
 
-def create_redis_client(url: Optional[str] = None, **kwargs: Any) -> redis.Redis:
+def create_redis_client(url: Optional[str] = None, **kwargs: Any) -> redis_async.Redis:
     """Create a Redis client with sensible defaults.
 
     Args:
@@ -258,6 +259,45 @@ def create_redis_client(url: Optional[str] = None, **kwargs: Any) -> redis.Redis
 
     Returns:
         Configured Redis client
+    """
+    if url:
+        return redis_async.from_url(  # type: ignore[misc]
+            url,
+            retry_on_timeout=True,
+            health_check_interval=30,
+            socket_connect_timeout=5.0,
+            socket_timeout=5.0,
+            **kwargs,
+        )
+
+    return redis_async.Redis(
+        host=kwargs.get("host", "localhost"),
+        port=kwargs.get("port", 6379),
+        db=kwargs.get("db", 0),
+        password=kwargs.get("password"),
+        username=kwargs.get("username"),
+        ssl=kwargs.get("ssl", False),
+        retry_on_timeout=True,
+        health_check_interval=30,
+        socket_connect_timeout=5.0,
+        socket_timeout=5.0,
+        **{
+            k: v
+            for k, v in kwargs.items()
+            if k not in ["host", "port", "db", "password", "username", "ssl"]
+        },
+    )
+
+
+def create_sync_redis_client(url: Optional[str] = None, **kwargs: Any) -> redis.Redis:
+    """Create a synchronous Redis client with sensible defaults.
+
+    Args:
+        url: Redis URL (redis://host:port/db)
+        **kwargs: Additional Redis client arguments
+
+    Returns:
+        Configured sync Redis client
     """
     if url:
         return redis.from_url(  # type: ignore[misc]

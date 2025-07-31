@@ -1,8 +1,10 @@
 """Test configuration and fixtures for a2a-redis tests."""
 
 import pytest
+import pytest_asyncio
 import redis
-from unittest.mock import MagicMock
+import redis.asyncio as redis_async
+from unittest.mock import MagicMock, AsyncMock
 
 from a2a_redis import (
     RedisTaskStore,
@@ -14,23 +16,43 @@ from a2a_redis import (
 
 @pytest.fixture
 def mock_redis():
-    """Mock Redis client for testing."""
-    mock_client = MagicMock(spec=redis.Redis)
+    """Mock async Redis client for testing."""
+    mock_client = AsyncMock(spec=redis_async.Redis)
+    # Ensure all Redis methods are async mocks
+    mock_client.hset = AsyncMock()
+    mock_client.hgetall = AsyncMock()
+    mock_client.exists = AsyncMock()
+    mock_client.delete = AsyncMock()
+    mock_client.keys = AsyncMock()
+    mock_client.hdel = AsyncMock()
+    mock_client.xadd = AsyncMock()
+    mock_client.xreadgroup = AsyncMock()
+    mock_client.xgroup_create = AsyncMock()
+    mock_client.xgroup_destroy = AsyncMock()
+    mock_client.publish = AsyncMock()
+    mock_client.pubsub = MagicMock()
+    # Mock JSON operations
+    mock_json = AsyncMock()
+    mock_json.set = AsyncMock()
+    mock_json.get = AsyncMock()
+    mock_client.json = MagicMock(return_value=mock_json)
     return mock_client
 
 
-@pytest.fixture
-def redis_client():
-    """Real Redis client for integration tests."""
+@pytest_asyncio.fixture
+async def redis_client():
+    """Real async Redis client for integration tests."""
     try:
-        client = redis.Redis(host="localhost", port=6379, db=15, decode_responses=False)
-        client.ping()
+        client = redis_async.Redis(
+            host="localhost", port=6379, db=15, decode_responses=False
+        )
+        await client.ping()
         # Clean the test database
-        client.flushdb()
+        await client.flushdb()
         yield client
         # Clean up after tests
-        client.flushdb()
-        client.close()
+        await client.flushdb()
+        await client.aclose()
     except redis.ConnectionError:
         pytest.skip("Redis server not available")
 
