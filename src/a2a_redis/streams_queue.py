@@ -1,38 +1,42 @@
-"""Redis-backed queue manager implementation for the A2A Python SDK.
+"""Redis Streams-backed event queue implementation for the A2A Python SDK.
 
-This module provides Redis-backed implementations of EventQueue with two options:
+This module provides a Redis Streams-based implementation of EventQueue,
+offering persistent, reliable event delivery with consumer groups, acknowledgments, and replay capability.
 
-**Redis Streams (default)** - RedisEventQueue:
-- Persistent event storage with replay capability
-- Guaranteed delivery with acknowledgments
-- Consumer groups for load balancing and failure recovery
-- Higher memory usage (events persist until trimmed)
-- Best for: Task event queues, audit trails, reliable processing
+**Key Features**:
+- **Persistent storage**: Events remain in streams until explicitly trimmed
+- **Guaranteed delivery**: Consumer groups with acknowledgments prevent message loss
+- **Load balancing**: Multiple consumers can share work via consumer groups
+- **Failure recovery**: Unacknowledged messages can be reclaimed by other consumers
+- **Event replay**: Historical events can be re-read from any point in time
+- **Ordering**: Maintains strict insertion order with unique message IDs
 
-**Redis Pub/Sub** - RedisPubSubEventQueue:
-- Real-time, fire-and-forget delivery
-- No persistence (events lost if no subscribers)
-- Natural broadcasting pattern
-- Minimal memory usage
-- Best for: Live notifications, real-time updates, system events
+**Use Cases**:
+- Task event queues requiring reliability
+- Audit trails and event history
+- Work distribution systems
+- Systems requiring failure recovery
+- Multi-consumer load balancing
 
-Choose the appropriate implementation based on your reliability vs. performance requirements.
+**Trade-offs**:
+- Higher memory usage (events persist)
+- More complex setup (consumer groups)
+- Slightly higher latency than pub/sub
+
+For real-time, fire-and-forget scenarios, consider RedisPubSubEventQueue instead.
 """
 
 import json
-from typing import Dict, Optional, Union
+from typing import Optional, Union
 
 import redis
-from a2a.server.events.queue_manager import QueueManager
 from a2a.server.events.event_queue import EventQueue
 from a2a.types import Message, Task, TaskStatusUpdateEvent, TaskArtifactUpdateEvent
 
 from .streams_consumer_strategy import ConsumerGroupConfig
-from .queue_types import QueueType
-from .pubsub_queue import RedisPubSubEventQueue
 
 
-class RedisEventQueue(EventQueue):
+class RedisStreamsEventQueue(EventQueue):
     """Redis Streams-backed implementation of EventQueue.
 
     This implementation uses Redis Streams for persistent, reliable event delivery
@@ -68,7 +72,7 @@ class RedisEventQueue(EventQueue):
         prefix: str = "stream:",
         consumer_config: Optional[ConsumerGroupConfig] = None,
     ):
-        """Initialize Redis event queue.
+        """Initialize Redis Streams event queue.
 
         Args:
             redis_client: Redis client instance
@@ -105,7 +109,14 @@ class RedisEventQueue(EventQueue):
         self,
         event: Union[Message, Task, TaskStatusUpdateEvent, TaskArtifactUpdateEvent],
     ) -> None:
-        """Add an event to the stream."""
+        """Add an event to the stream.
+
+        Args:
+            event: Event to add to the stream
+
+        Raises:
+            RuntimeError: If queue is closed
+        """
         if self._closed:
             raise RuntimeError("Cannot enqueue to closed queue")
 
@@ -132,7 +143,17 @@ class RedisEventQueue(EventQueue):
     async def dequeue_event(
         self, no_wait: bool = False
     ) -> Union[Message, Task, TaskStatusUpdateEvent, TaskArtifactUpdateEvent]:
-        """Remove and return an event from the stream."""
+        """Remove and return an event from the stream.
+
+        Args:
+            no_wait: If True, return immediately if no events available
+
+        Returns:
+            Event data dictionary
+
+        Raises:
+            RuntimeError: If queue is closed or no events available
+        """
         if self._closed:
             raise RuntimeError("Cannot dequeue from closed queue")
 
@@ -177,7 +198,7 @@ class RedisEventQueue(EventQueue):
             raise RuntimeError(f"Error reading from stream: {e}")
 
     async def close(self) -> None:
-        """Close the queue."""
+        """Close the queue and clean up pending messages."""
         self._closed = True
         # Optionally clean up pending messages for this consumer
         try:
@@ -207,139 +228,15 @@ class RedisEventQueue(EventQueue):
         return self._closed
 
     def tap(self) -> "EventQueue":
-        """Create a tap (copy) of this queue."""
-        # Create a new queue with same stream but different consumer ID
-        return RedisEventQueue(
+        """Create a tap (copy) of this queue.
+
+        Creates a new queue with the same stream but different consumer ID
+        for independent message processing.
+        """
+        return RedisStreamsEventQueue(
             self.redis, self.task_id, self.prefix, self.consumer_config
         )
 
     def task_done(self) -> None:
         """Mark a task as done (for compatibility)."""
         pass  # Stream acknowledgment is handled in dequeue_event
-
-
-class RedisQueueManager(QueueManager):
-    """Redis-backed implementation of the A2A QueueManager interface.
-
-    Supports two types of Redis-backed event queues:
-
-    **QueueType.STREAMS (default)**:
-    - Uses Redis Streams for persistent, reliable event delivery
-    - Supports consumer groups, acknowledgments, and replay
-    - Best for task queues and reliable event processing
-
-    **QueueType.PUBSUB**:
-    - Uses Redis Pub/Sub for real-time, fire-and-forget delivery
-    - No persistence, immediate delivery to active subscribers
-    - Best for live notifications and real-time updates
-
-    Example:
-        # Default streams-based queue manager
-        manager = RedisQueueManager(redis_client)
-
-        # Pub/sub-based queue manager for real-time notifications
-        manager = RedisQueueManager(redis_client, queue_type=QueueType.PUBSUB)
-
-        # Streams with custom consumer configuration
-        config = ConsumerGroupConfig(strategy=ConsumerGroupStrategy.SHARED_LOAD_BALANCING)
-        manager = RedisQueueManager(redis_client, consumer_config=config)
-    """
-
-    def __init__(
-        self,
-        redis_client: redis.Redis,
-        queue_type: QueueType = QueueType.STREAMS,
-        prefix: Optional[str] = None,
-        consumer_config: Optional[ConsumerGroupConfig] = None,
-    ):
-        """Initialize the Redis queue manager.
-
-        Args:
-            redis_client: Redis client instance
-            queue_type: Type of queue implementation to use
-            prefix: Key prefix for storage (defaults based on queue type)
-            consumer_config: Consumer group configuration (only used for STREAMS)
-        """
-        self.redis = redis_client
-        self.queue_type = queue_type
-
-        # Set default prefixes based on queue type
-        if prefix is None:
-            prefix = "stream:" if queue_type == QueueType.STREAMS else "pubsub:"
-        self.prefix = prefix
-
-        # Consumer config only applies to streams
-        if queue_type == QueueType.STREAMS:
-            self.consumer_config = consumer_config or ConsumerGroupConfig()
-        else:
-            self.consumer_config = None
-
-        self._queues: Dict[str, EventQueue] = {}
-
-    def _create_queue(self, task_id: str) -> EventQueue:
-        """Create a queue instance based on the configured queue type."""
-        if self.queue_type == QueueType.STREAMS:
-            return RedisEventQueue(
-                self.redis, task_id, self.prefix, self.consumer_config
-            )
-        elif self.queue_type == QueueType.PUBSUB:
-            return RedisPubSubEventQueue(self.redis, task_id, self.prefix)
-        else:
-            raise ValueError(f"Unsupported queue type: {self.queue_type}")
-
-    async def add(self, task_id: str, queue: EventQueue) -> None:
-        """Add a queue for a task (a2a-sdk interface).
-
-        Args:
-            task_id: Task identifier
-            queue: EventQueue instance to add (ignored, we create our own)
-        """
-        # For Redis implementation, we create our own queue but this maintains interface
-        self._queues[task_id] = self._create_queue(task_id)
-
-    async def close(self, task_id: str) -> None:
-        """Close a queue for a task (a2a-sdk interface).
-
-        Args:
-            task_id: Task identifier
-        """
-        if task_id in self._queues:
-            self._queues[task_id].close()
-            del self._queues[task_id]
-
-    async def create_or_tap(self, task_id: str) -> EventQueue:
-        """Create or get existing queue for a task (a2a-sdk interface).
-
-        Args:
-            task_id: Task identifier
-
-        Returns:
-            EventQueue instance for the task
-        """
-        if task_id not in self._queues:
-            self._queues[task_id] = self._create_queue(task_id)
-        return self._queues[task_id]
-
-    async def get(self, task_id: str) -> Optional[EventQueue]:
-        """Get existing queue for a task (a2a-sdk interface).
-
-        Args:
-            task_id: Task identifier
-
-        Returns:
-            EventQueue instance or None if not found
-        """
-        return self._queues.get(task_id)
-
-    async def tap(self, task_id: str) -> Optional[EventQueue]:
-        """Create a tap of existing queue for a task (a2a-sdk interface).
-
-        Args:
-            task_id: Task identifier
-
-        Returns:
-            EventQueue tap or None if queue doesn't exist
-        """
-        if task_id in self._queues:
-            return self._queues[task_id].tap()
-        return None

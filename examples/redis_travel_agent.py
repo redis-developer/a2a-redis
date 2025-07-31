@@ -1,4 +1,9 @@
-"""Example A2A agent using Redis components for storage and queue management."""
+"""Example A2A agent using Redis components for storage and queue management.
+
+This example uses Redis Streams for reliable event queuing (default).
+For real-time, fire-and-forget scenarios, see pubsub_vs_streams_comparison.py
+which demonstrates both Redis Streams and Redis Pub/Sub implementations.
+"""
 
 from a2a.server.apps import A2AStarletteApplication
 from a2a.server.request_handlers import DefaultRequestHandler
@@ -49,7 +54,7 @@ def create_redis_components():
 
     # Create Redis-backed components (all working with a2a-sdk interfaces)
     task_store = RedisTaskStore(redis_client, prefix="travel_agent:tasks:")
-    queue_manager = RedisQueueManager(redis_client, prefix="travel_agent:queues:")
+    queue_manager = RedisQueueManager(redis_client, prefix="travel_agent:streams:")
     push_config_store = RedisPushNotificationConfigStore(
         redis_client, prefix="travel_agent:push:"
     )
@@ -105,7 +110,7 @@ def main():
     print("📍 Agent URL: http://localhost:10001/")
     print("🔄 Using Redis for:")
     print("   • Task storage (persistent) ✅")
-    print("   • Event queues (Redis Lists) ✅")
+    print("   • Event queues (Redis Streams with consumer groups) ✅")
     print("   • Push notification configs (Redis Hashes) ✅")
     print("\n💡 Make sure Redis is running on localhost:6379")
     print("📝 All agent data is now persisted in Redis - fully stateless agent!")

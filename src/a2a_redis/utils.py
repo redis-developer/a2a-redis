@@ -90,7 +90,11 @@ class RedisConnectionManager:
         """Force reconnection to Redis."""
         try:
             if self._client:
-                self._client.close()
+                try:
+                    self._client.close()
+                except Exception as e:
+                    # Log the close error but don't fail the reconnect
+                    logger.error(f"Failed to reconnect to Redis: {e}")
             self._client = None
             return self.health_check()
         except Exception as e:

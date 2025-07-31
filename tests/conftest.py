@@ -6,7 +6,8 @@ from unittest.mock import MagicMock
 
 from a2a_redis import (
     RedisTaskStore,
-    RedisQueueManager,
+    RedisStreamsQueueManager,
+    RedisPubSubQueueManager,
     RedisPushNotificationConfigStore,
 )
 
@@ -41,11 +42,15 @@ def task_store(redis_client):
 
 
 @pytest.fixture
-def queue_manager(redis_client):
-    """RedisQueueManager instance for testing."""
-    return RedisQueueManager(
-        redis_client, stream_name="test_stream", consumer_group="test_group"
-    )
+def streams_queue_manager(redis_client):
+    """RedisStreamsQueueManager instance for testing."""
+    return RedisStreamsQueueManager(redis_client, prefix="test_stream:")
+
+
+@pytest.fixture
+def pubsub_queue_manager(redis_client):
+    """RedisPubSubQueueManager instance for testing."""
+    return RedisPubSubQueueManager(redis_client, prefix="test_pubsub:")
 
 
 @pytest.fixture
@@ -57,16 +62,19 @@ def push_config_store(redis_client):
 @pytest.fixture
 def sample_task_data():
     """Sample task data for testing."""
+    from a2a.types import TaskStatus, TaskState
+
     return {
         "id": "task_123",
-        "status": "pending",
-        "description": "Test task",
+        "context_id": "context_456",
+        "status": TaskStatus(state=TaskState.submitted),
         "metadata": {
             "user_id": "user_456",
             "priority": "high",
             "tags": ["test", "sample"],
+            "description": "Test task",
+            "created_at": "2024-01-01T00:00:00Z",
         },
-        "created_at": "2024-01-01T00:00:00Z",
     }
 
 

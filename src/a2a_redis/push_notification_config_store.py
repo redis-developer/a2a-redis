@@ -34,7 +34,9 @@ class RedisPushNotificationConfigStore(PushNotificationConfigStore):
         Returns:
             List of PushNotificationConfig objects
         """
-        configs_data: Dict[bytes, bytes] = self.redis.hgetall(self._task_key(task_id))  # type: ignore[assignment]
+        configs_data: Dict[bytes, bytes] = self.redis.hgetall(
+            self._task_key(task_id)
+        )  # type: ignore[assignment]
         if not configs_data:
             return []
 

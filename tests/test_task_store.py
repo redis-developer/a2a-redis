@@ -21,7 +21,7 @@ class TestRedisTaskStore:
         assert store._task_key("123") == "task:123"
 
     def test_save_task(self, mock_redis, sample_task_data):
-        """Test task saving (a2a-sdk interface)."""
+        """Test task saving."""
         store = RedisTaskStore(mock_redis)
         store.save("task_123", sample_task_data)
 
@@ -36,16 +36,8 @@ class TestRedisTaskStore:
         assert isinstance(mapping["metadata"], str)  # Should be JSON string
         assert json.loads(mapping["metadata"]) == sample_task_data["metadata"]
 
-    def test_create_task_backward_compatibility(self, mock_redis, sample_task_data):
-        """Test backward compatibility method."""
-        store = RedisTaskStore(mock_redis)
-        store.create_task("task_123", sample_task_data)
-
-        # Should call save internally
-        mock_redis.hset.assert_called_once()
-
     def test_get_task_exists(self, mock_redis, sample_task_data):
-        """Test retrieving an existing task (a2a-sdk interface)."""
+        """Test retrieving an existing task."""
         # Mock Redis response
         mock_redis.hgetall.return_value = {
             b"id": b"task_123",
@@ -64,7 +56,7 @@ class TestRedisTaskStore:
         mock_redis.hgetall.assert_called_once_with("task:task_123")
 
     def test_get_task_not_exists(self, mock_redis):
-        """Test retrieving a non-existent task (a2a-sdk interface)."""
+        """Test retrieving a non-existent task."""
         mock_redis.hgetall.return_value = {}
 
         store = RedisTaskStore(mock_redis)
@@ -72,16 +64,6 @@ class TestRedisTaskStore:
 
         assert result is None
         mock_redis.hgetall.assert_called_once_with("task:nonexistent")
-
-    def test_get_task_backward_compatibility(self, mock_redis, sample_task_data):
-        """Test backward compatibility method."""
-        mock_redis.hgetall.return_value = {b"id": b"task_123", b"status": b"pending"}
-
-        store = RedisTaskStore(mock_redis)
-        result = store.get_task("task_123")
-
-        assert result is not None
-        assert result["id"] == "task_123"
 
     def test_serialize_data_edge_cases(self, mock_redis):
         """Test serialization edge cases."""
@@ -153,7 +135,7 @@ class TestRedisTaskStore:
         mock_redis.hset.assert_not_called()
 
     def test_delete_task(self, mock_redis):
-        """Test task deletion (a2a-sdk interface)."""
+        """Test task deletion."""
         mock_redis.delete.return_value = 1
 
         store = RedisTaskStore(mock_redis)
@@ -163,7 +145,7 @@ class TestRedisTaskStore:
         mock_redis.delete.assert_called_once_with("task:task_123")
 
     def test_delete_task_not_exists(self, mock_redis):
-        """Test deleting a non-existent task (a2a-sdk interface)."""
+        """Test deleting a non-existent task."""
         mock_redis.delete.return_value = 0
 
         store = RedisTaskStore(mock_redis)
@@ -172,32 +154,22 @@ class TestRedisTaskStore:
         assert result is False
         mock_redis.delete.assert_called_once_with("task:nonexistent")
 
-    def test_delete_task_backward_compatibility(self, mock_redis):
-        """Test backward compatibility method."""
-        mock_redis.delete.return_value = 1
-
-        store = RedisTaskStore(mock_redis)
-        result = store.delete_task("task_123")
-
-        assert result is True
-        mock_redis.delete.assert_called_once_with("task:task_123")
-
-    def test_list_tasks(self, mock_redis):
-        """Test listing tasks."""
+    def test_list_task_ids(self, mock_redis):
+        """Test listing task IDs."""
         mock_redis.keys.return_value = [b"task:123", b"task:456", b"task:789"]
 
         store = RedisTaskStore(mock_redis)
-        result = store.list_tasks()
+        result = store.list_task_ids()
 
         assert result == ["123", "456", "789"]
         mock_redis.keys.assert_called_once_with("task:*")
 
-    def test_list_tasks_with_pattern(self, mock_redis):
-        """Test listing tasks with pattern."""
+    def test_list_task_ids_with_pattern(self, mock_redis):
+        """Test listing task IDs with pattern."""
         mock_redis.keys.return_value = [b"task:user_123", b"task:user_456"]
 
         store = RedisTaskStore(mock_redis)
-        result = store.list_tasks("user_*")
+        result = store.list_task_ids("user_*")
 
         assert result == ["user_123", "user_456"]
         mock_redis.keys.assert_called_once_with("task:user_*")
@@ -224,18 +196,18 @@ class TestRedisTaskStoreIntegration:
         assert not task_store.task_exists(task_id)
         assert task_store.get(task_id) is None
 
-        # Save task (a2a-sdk interface)
+        # Save task
         task_store.save(task_id, sample_task_data)
         assert task_store.task_exists(task_id)
 
-        # Retrieve task (a2a-sdk interface)
+        # Retrieve task
         retrieved_task = task_store.get(task_id)
         assert retrieved_task is not None
         assert retrieved_task["id"] == sample_task_data["id"]
         assert retrieved_task["status"] == sample_task_data["status"]
         assert retrieved_task["metadata"] == sample_task_data["metadata"]
 
-        # Update task (convenience method)
+        # Update task
         updates = {"status": "in_progress", "progress": 50}
         assert task_store.update_task(task_id, updates)
 
@@ -244,27 +216,14 @@ class TestRedisTaskStoreIntegration:
         # Numbers are stored as strings in Redis but deserialized as original type
         assert updated_task["progress"] == "50" or updated_task["progress"] == 50
 
-        # List tasks (convenience method)
-        task_list = task_store.list_tasks()
+        # List tasks
+        task_list = task_store.list_task_ids()
         assert task_id in task_list
 
-        # Delete task (a2a-sdk interface)
+        # Delete task
         assert task_store.delete(task_id)
         assert not task_store.task_exists(task_id)
         assert task_store.get(task_id) is None
-
-    def test_backward_compatibility_methods(self, task_store, sample_task_data):
-        """Test that backward compatibility methods work."""
-        task_id = "backward_compat_test"
-
-        # Use old interface methods
-        task_store.create_task(task_id, sample_task_data)
-        retrieved = task_store.get_task(task_id)
-        assert retrieved is not None
-        assert retrieved["id"] == sample_task_data["id"]
-
-        # Clean up
-        task_store.delete_task(task_id)
 
 
 class TestRedisJSONTaskStore:
@@ -277,7 +236,7 @@ class TestRedisJSONTaskStore:
         assert store.prefix == "json:"
 
     def test_save_task(self, mock_redis, sample_task_data):
-        """Test task saving with JSON (a2a-sdk interface)."""
+        """Test task saving with JSON."""
         mock_json = MagicMock()
         mock_redis.json.return_value = mock_json
 
@@ -287,19 +246,8 @@ class TestRedisJSONTaskStore:
         mock_redis.json.assert_called_once()
         mock_json.set.assert_called_once_with("task:task_123", "$", sample_task_data)
 
-    def test_create_task_backward_compatibility(self, mock_redis, sample_task_data):
-        """Test backward compatibility method."""
-        mock_json = MagicMock()
-        mock_redis.json.return_value = mock_json
-
-        store = RedisJSONTaskStore(mock_redis)
-        store.create_task("task_123", sample_task_data)
-
-        mock_redis.json.assert_called_once()
-        mock_json.set.assert_called_once_with("task:task_123", "$", sample_task_data)
-
     def test_get_task_exists(self, mock_redis, sample_task_data):
-        """Test retrieving an existing task with JSON (a2a-sdk interface)."""
+        """Test retrieving an existing task with JSON."""
         mock_json = MagicMock()
         mock_json.get.return_value = sample_task_data
         mock_redis.json.return_value = mock_json
@@ -322,7 +270,7 @@ class TestRedisJSONTaskStore:
         assert result is None
 
     def test_delete_task(self, mock_redis):
-        """Test task deletion with JSON (a2a-sdk interface)."""
+        """Test task deletion with JSON."""
         mock_redis.delete.return_value = 1
 
         store = RedisJSONTaskStore(mock_redis)
@@ -356,3 +304,23 @@ class TestRedisJSONTaskStore:
         result = store.update_task("nonexistent", {"status": "completed"})
 
         assert result is False
+
+    def test_list_task_ids(self, mock_redis):
+        """Test listing task IDs."""
+        mock_redis.keys.return_value = [b"task:123", b"task:456"]
+
+        store = RedisJSONTaskStore(mock_redis)
+        result = store.list_task_ids()
+
+        assert result == ["123", "456"]
+        mock_redis.keys.assert_called_once_with("task:*")
+
+    def test_task_exists(self, mock_redis):
+        """Test checking if task exists."""
+        mock_redis.exists.return_value = True
+
+        store = RedisJSONTaskStore(mock_redis)
+        result = store.task_exists("task_123")
+
+        assert result is True
+        mock_redis.exists.assert_called_once_with("task:task_123")
