@@ -20,7 +20,7 @@ pip install a2a-redis
 ## Quick Start
 
 ```python
-from a2a_redis import RedisTaskStore, RedisQueueManager, RedisPushNotificationConfigStore
+from a2a_redis import RedisTaskStore, RedisStreamsQueueManager, RedisPushNotificationConfigStore
 from a2a_redis.utils import create_redis_client
 from a2a.server.request_handlers import DefaultRequestHandler
 from a2a.server.apps import A2AStarletteApplication
@@ -30,7 +30,7 @@ redis_client = create_redis_client(url="redis://localhost:6379/0", max_connectio
 
 # Initialize Redis components
 task_store = RedisTaskStore(redis_client, prefix="myapp:tasks:")
-queue_manager = RedisQueueManager(redis_client, prefix="myapp:queues:")
+queue_manager = RedisStreamsQueueManager(redis_client, prefix="myapp:queues:")
 push_config_store = RedisPushNotificationConfigStore(redis_client, prefix="myapp:push:")
 
 # Use with A2A request handler
@@ -47,6 +47,62 @@ server = A2AStarletteApplication(
     http_handler=request_handler
 )
 ```
+
+## Queue Manager Types: Streams vs Pub/Sub
+
+This package provides two queue manager implementations with different characteristics:
+
+### RedisStreamsQueueManager
+
+**Key Features:**
+- **Persistent storage**: Events remain in streams until explicitly trimmed
+- **Guaranteed delivery**: Consumer groups with acknowledgments prevent message loss
+- **Load balancing**: Multiple consumers can share work via consumer groups
+- **Failure recovery**: Unacknowledged messages can be reclaimed by other consumers
+- **Event replay**: Historical events can be re-read from any point in time
+- **Ordering**: Maintains strict insertion order with unique message IDs
+
+**Use Cases:**
+- Task event queues requiring reliability
+- Audit trails and event history
+- Work distribution systems
+- Systems requiring failure recovery
+- Multi-consumer load balancing
+
+**Trade-offs:**
+- Higher memory usage (events persist)
+- More complex setup (consumer groups)
+- Slightly higher latency than pub/sub
+
+### RedisPubSubQueueManager
+
+**Key Features:**
+- **Real-time delivery**: Events delivered immediately to active subscribers
+- **No persistence**: Events not stored, only delivered to active consumers
+- **Fire-and-forget**: No acknowledgments or delivery guarantees
+- **Broadcasting**: All subscribers receive all events
+- **Low latency**: Minimal overhead for immediate delivery
+- **Minimal memory usage**: No storage of events
+
+**Use Cases:**
+- Live status updates and notifications
+- Real-time dashboard updates
+- System event broadcasting
+- Non-critical event distribution
+- Low-latency requirements
+- Simple fan-out scenarios
+
+**Not suitable for:**
+- Critical event processing requiring guarantees
+- Systems requiring event replay or audit trails
+- Offline-capable applications
+- Work queues requiring load balancing
+
+**Behavior Notes:**
+- Events published before subscribers are active will be lost
+- All subscribers receive all events (broadcast pattern)
+- No consumer groups or load balancing
+- Network partitions can cause message loss
 
 ## Components
 
@@ -72,19 +128,30 @@ success = task_store.delete("task123")
 task_ids = task_store.list_task_ids()
 ```
 
-### RedisQueueManager
+### Queue Managers
 
-Manages event queues using Redis Lists for task-based event queues. Implements the A2A QueueManager interface with async support.
+Both queue managers implement the A2A QueueManager interface with async support:
 
 ```python
 import asyncio
-from a2a_redis import RedisQueueManager
+from a2a_redis import RedisStreamsQueueManager, RedisPubSubQueueManager
+from a2a_redis.streams_consumer_strategy import ConsumerGroupConfig, ConsumerGroupStrategy
 
-queue_manager = RedisQueueManager(redis_client, prefix="myapp:queues:")
+# Choose based on your requirements:
+
+# For reliable, persistent processing
+streams_manager = RedisStreamsQueueManager(redis_client, prefix="myapp:streams:")
+
+# For real-time, low-latency broadcasting
+pubsub_manager = RedisPubSubQueueManager(redis_client, prefix="myapp:pubsub:")
+
+# With custom consumer group configuration (streams only)
+config = ConsumerGroupConfig(strategy=ConsumerGroupStrategy.SHARED_LOAD_BALANCING)
+streams_manager = RedisStreamsQueueManager(redis_client, consumer_config=config)
 
 async def main():
-    # Create or get existing queue for a task
-    queue = await queue_manager.create_or_tap("task123")
+    # Same interface for both managers
+    queue = await streams_manager.create_or_tap("task123")
 
     # Enqueue events
     queue.enqueue_event({"type": "progress", "message": "Task started"})
@@ -98,7 +165,7 @@ async def main():
         print("No events available")
 
     # Close queue when done
-    await queue_manager.close("task123")
+    await streams_manager.close("task123")
 
 asyncio.run(main())
 ```

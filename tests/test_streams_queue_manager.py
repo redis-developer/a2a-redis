@@ -23,8 +23,8 @@ class TestRedisStreamsEventQueue:
         assert queue._stream_key == "stream:task_123"
         assert not queue._closed
 
-        # Verify consumer group creation was attempted
-        mock_redis.xgroup_create.assert_called_once()
+        # Consumer group is created on first use, not during initialization
+        mock_redis.xgroup_create.assert_not_called()
 
     def test_init_with_custom_prefix(self, mock_redis):
         """Test RedisStreamsEventQueue with custom prefix."""
@@ -40,12 +40,13 @@ class TestRedisStreamsEventQueue:
         queue = RedisStreamsEventQueue(mock_redis, "task_123", consumer_config=config)
         assert queue.consumer_config == config
 
-    def test_enqueue_event_simple(self, mock_redis):
+    @pytest.mark.asyncio
+    async def test_enqueue_event_simple(self, mock_redis):
         """Test enqueueing a simple event."""
         queue = RedisStreamsEventQueue(mock_redis, "task_123")
 
         event_data = {"type": "test", "data": "sample"}
-        queue.enqueue_event(event_data)
+        await queue.enqueue_event(event_data)
 
         # Verify xadd was called with proper structure
         mock_redis.xadd.assert_called_once()
@@ -57,7 +58,8 @@ class TestRedisStreamsEventQueue:
         assert "event_data" in fields
         assert fields["event_type"] == "dict"
 
-    def test_enqueue_event_with_model_dump(self, mock_redis, sample_task_data):
+    @pytest.mark.asyncio
+    async def test_enqueue_event_with_model_dump(self, mock_redis, sample_task_data):
         """Test enqueueing an event with model_dump method."""
         queue = RedisStreamsEventQueue(mock_redis, "task_123")
 
@@ -65,21 +67,23 @@ class TestRedisStreamsEventQueue:
         event = MagicMock()
         event.model_dump.return_value = sample_task_data
 
-        queue.enqueue_event(event)
+        await queue.enqueue_event(event)
 
         # Verify model_dump was called and data was serialized
         event.model_dump.assert_called_once()
         mock_redis.xadd.assert_called_once()
 
-    def test_enqueue_event_closed_queue(self, mock_redis):
+    @pytest.mark.asyncio
+    async def test_enqueue_event_closed_queue(self, mock_redis):
         """Test enqueueing to a closed queue raises error."""
         queue = RedisStreamsEventQueue(mock_redis, "task_123")
         queue._closed = True
 
         with pytest.raises(RuntimeError, match="Cannot enqueue to closed queue"):
-            queue.enqueue_event({"test": "data"})
+            await queue.enqueue_event({"test": "data"})
 
-    def test_dequeue_event_success(self, mock_redis):
+    @pytest.mark.asyncio
+    async def test_dequeue_event_success(self, mock_redis):
         """Test successful event dequeuing."""
         queue = RedisStreamsEventQueue(mock_redis, "task_123")
 
@@ -99,7 +103,7 @@ class TestRedisStreamsEventQueue:
             )
         ]
 
-        result = queue.dequeue_event(no_wait=True)
+        result = await queue.dequeue_event(no_wait=True)
 
         # Verify proper calls were made
         mock_redis.xreadgroup.assert_called_once()
@@ -110,27 +114,30 @@ class TestRedisStreamsEventQueue:
         # Verify returned data
         assert result == {"type": "test", "data": "sample"}
 
-    def test_dequeue_event_no_wait_timeout(self, mock_redis):
+    @pytest.mark.asyncio
+    async def test_dequeue_event_no_wait_timeout(self, mock_redis):
         """Test dequeuing with no_wait timeout."""
         queue = RedisStreamsEventQueue(mock_redis, "task_123")
         mock_redis.xreadgroup.return_value = []
 
         with pytest.raises(RuntimeError, match="No events available"):
-            queue.dequeue_event(no_wait=True)
+            await queue.dequeue_event(no_wait=True)
 
         # Verify timeout was set to 0 (non-blocking)
         call_args = mock_redis.xreadgroup.call_args
         assert call_args[1]["block"] == 0
 
-    def test_dequeue_event_closed_queue(self, mock_redis):
+    @pytest.mark.asyncio
+    async def test_dequeue_event_closed_queue(self, mock_redis):
         """Test dequeuing from a closed queue raises error."""
         queue = RedisStreamsEventQueue(mock_redis, "task_123")
         queue._closed = True
 
         with pytest.raises(RuntimeError, match="Cannot dequeue from closed queue"):
-            queue.dequeue_event()
+            await queue.dequeue_event()
 
-    def test_close_queue(self, mock_redis):
+    @pytest.mark.asyncio
+    async def test_close_queue(self, mock_redis):
         """Test closing the queue."""
         queue = RedisStreamsEventQueue(mock_redis, "task_123")
 
@@ -140,7 +147,7 @@ class TestRedisStreamsEventQueue:
             {"message_id": b"124-0"},
         ]
 
-        queue.close()
+        await queue.close()
 
         assert queue._closed
         # Verify pending messages were acknowledged
@@ -298,13 +305,13 @@ class TestRedisStreamsQueueManagerIntegration:
 
         # Enqueue event
         test_event = {"type": "test", "data": "integration"}
-        queue.enqueue_event(test_event)
+        await queue.enqueue_event(test_event)
 
         # Create another consumer (tap) to test consumer groups
         tap = await manager.tap("integration_test")
 
         # Dequeue event
-        result = tap.dequeue_event(no_wait=True)
+        result = await tap.dequeue_event(no_wait=True)
         assert result == test_event
 
         # Close queue
@@ -324,17 +331,17 @@ class TestRedisStreamsQueueManagerIntegration:
 
         # Enqueue multiple events
         for i in range(5):
-            queue.enqueue_event({"id": i, "data": f"event_{i}"})
+            await queue.enqueue_event({"id": i, "data": f"event_{i}"})
 
         # Both consumers should be able to get events
         events = []
         for _ in range(5):
             try:
-                event = queue.dequeue_event(no_wait=True)
+                event = await queue.dequeue_event(no_wait=True)
                 events.append(event)
             except RuntimeError:
                 try:
-                    event = tap.dequeue_event(no_wait=True)
+                    event = await tap.dequeue_event(no_wait=True)
                     events.append(event)
                 except RuntimeError:
                     break

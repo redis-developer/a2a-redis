@@ -29,13 +29,14 @@ class TestRedisPubSubEventQueue:
             assert queue.prefix == "custom:"
             assert queue._channel == "custom:task_123"
 
-    def test_enqueue_event_simple(self, mock_redis):
+    @pytest.mark.asyncio
+    async def test_enqueue_event_simple(self, mock_redis):
         """Test enqueueing a simple event."""
         with patch.object(RedisPubSubEventQueue, "_setup_subscription"):
             queue = RedisPubSubEventQueue(mock_redis, "task_123")
 
             event_data = {"type": "test", "data": "sample"}
-            queue.enqueue_event(event_data)
+            await queue.enqueue_event(event_data)
 
             # Verify publish was called
             mock_redis.publish.assert_called_once()
@@ -49,7 +50,8 @@ class TestRedisPubSubEventQueue:
             assert message["event_type"] == "dict"
             assert message["event_data"] == event_data
 
-    def test_enqueue_event_with_model_dump(self, mock_redis, sample_task_data):
+    @pytest.mark.asyncio
+    async def test_enqueue_event_with_model_dump(self, mock_redis, sample_task_data):
         """Test enqueueing an event with model_dump method."""
         with patch.object(RedisPubSubEventQueue, "_setup_subscription"):
             queue = RedisPubSubEventQueue(mock_redis, "task_123")
@@ -58,22 +60,24 @@ class TestRedisPubSubEventQueue:
             event = MagicMock()
             event.model_dump.return_value = sample_task_data
 
-            queue.enqueue_event(event)
+            await queue.enqueue_event(event)
 
             # Verify model_dump was called and data was published
             event.model_dump.assert_called_once()
             mock_redis.publish.assert_called_once()
 
-    def test_enqueue_event_closed_queue(self, mock_redis):
+    @pytest.mark.asyncio
+    async def test_enqueue_event_closed_queue(self, mock_redis):
         """Test enqueueing to a closed queue raises error."""
         with patch.object(RedisPubSubEventQueue, "_setup_subscription"):
             queue = RedisPubSubEventQueue(mock_redis, "task_123")
             queue._closed = True
 
             with pytest.raises(RuntimeError, match="Cannot enqueue to closed queue"):
-                queue.enqueue_event({"test": "data"})
+                await queue.enqueue_event({"test": "data"})
 
-    def test_dequeue_event_success(self, mock_redis):
+    @pytest.mark.asyncio
+    async def test_dequeue_event_success(self, mock_redis):
         """Test successful event dequeuing."""
         with patch.object(RedisPubSubEventQueue, "_setup_subscription"):
             queue = RedisPubSubEventQueue(mock_redis, "task_123")
@@ -88,27 +92,30 @@ class TestRedisPubSubEventQueue:
 
             queue._message_queue.put(message)
 
-            result = queue.dequeue_event(no_wait=True)
+            result = await queue.dequeue_event(no_wait=True)
             assert result == test_data
 
-    def test_dequeue_event_no_wait_timeout(self, mock_redis):
+    @pytest.mark.asyncio
+    async def test_dequeue_event_no_wait_timeout(self, mock_redis):
         """Test dequeuing with no_wait when no messages available."""
         with patch.object(RedisPubSubEventQueue, "_setup_subscription"):
             queue = RedisPubSubEventQueue(mock_redis, "task_123")
 
             with pytest.raises(RuntimeError, match="No events available"):
-                queue.dequeue_event(no_wait=True)
+                await queue.dequeue_event(no_wait=True)
 
-    def test_dequeue_event_closed_queue(self, mock_redis):
+    @pytest.mark.asyncio
+    async def test_dequeue_event_closed_queue(self, mock_redis):
         """Test dequeuing from a closed queue raises error."""
         with patch.object(RedisPubSubEventQueue, "_setup_subscription"):
             queue = RedisPubSubEventQueue(mock_redis, "task_123")
             queue._closed = True
 
             with pytest.raises(RuntimeError, match="Cannot dequeue from closed queue"):
-                queue.dequeue_event()
+                await queue.dequeue_event()
 
-    def test_close_queue(self, mock_redis):
+    @pytest.mark.asyncio
+    async def test_close_queue(self, mock_redis):
         """Test closing the queue."""
         with patch.object(RedisPubSubEventQueue, "_setup_subscription"):
             queue = RedisPubSubEventQueue(mock_redis, "task_123")
@@ -119,7 +126,7 @@ class TestRedisPubSubEventQueue:
             queue._pubsub = mock_pubsub
             queue._subscriber_thread = mock_thread
 
-            queue.close()
+            await queue.close()
 
             assert queue._closed
             mock_pubsub.unsubscribe.assert_called_once_with("pubsub:task_123")
@@ -299,7 +306,7 @@ class TestRedisPubSubQueueManagerIntegration:
 
         # Enqueue event
         test_event = {"type": "test", "data": "integration"}
-        queue.enqueue_event(test_event)
+        await queue.enqueue_event(test_event)
 
         # Give message time to propagate
         await asyncio.sleep(0.1)
@@ -307,10 +314,10 @@ class TestRedisPubSubQueueManagerIntegration:
         # Dequeue event (might need to try both since pub/sub broadcasts)
         result = None
         try:
-            result = tap.dequeue_event(no_wait=True)
+            result = await tap.dequeue_event(no_wait=True)
         except RuntimeError:
             try:
-                result = queue.dequeue_event(no_wait=True)
+                result = await queue.dequeue_event(no_wait=True)
             except RuntimeError:
                 pass
 
@@ -350,7 +357,7 @@ class TestRedisPubSubQueueManagerIntegration:
         received_count = 0
         for queue in [queue1, queue2, queue3]:
             try:
-                result = queue.dequeue_event(no_wait=True)
+                result = await queue.dequeue_event(no_wait=True)
                 if result == test_event:
                     received_count += 1
             except RuntimeError:

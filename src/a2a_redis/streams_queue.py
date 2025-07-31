@@ -29,7 +29,7 @@ For real-time, fire-and-forget scenarios, consider RedisPubSubEventQueue instead
 import json
 from typing import Optional, Union
 
-import redis
+import redis.asyncio as redis
 from a2a.server.events.event_queue import EventQueue
 from a2a.types import Message, Task, TaskStatusUpdateEvent, TaskArtifactUpdateEvent
 
@@ -37,32 +37,10 @@ from .streams_consumer_strategy import ConsumerGroupConfig
 
 
 class RedisStreamsEventQueue(EventQueue):
-    """Redis Streams-backed implementation of EventQueue.
+    """Redis Streams-backed EventQueue for persistent, reliable event delivery.
 
-    This implementation uses Redis Streams for persistent, reliable event delivery
-    with consumer groups, acknowledgments, and replay capability.
-
-    **Key Characteristics**:
-    - **Persistent storage**: Events remain in stream until explicitly trimmed
-    - **Guaranteed delivery**: Consumer groups with acknowledgments prevent message loss
-    - **Load balancing**: Multiple consumers can share work via consumer groups
-    - **Failure recovery**: Unacknowledged messages can be reclaimed by other consumers
-    - **Event replay**: Historical events can be re-read from any point in time
-    - **Ordering**: Maintains strict insertion order with unique message IDs
-
-    **Use Cases**:
-    - Task event queues requiring reliability
-    - Audit trails and event history
-    - Work distribution systems
-    - Systems requiring failure recovery
-    - Multi-consumer load balancing
-
-    **Trade-offs**:
-    - Higher memory usage (events persist)
-    - More complex setup (consumer groups)
-    - Slightly higher latency than pub/sub
-
-    For real-time, fire-and-forget scenarios, consider RedisPubSubEventQueue instead.
+    Provides guaranteed delivery with consumer groups, acknowledgments, and replay
+    capability. See README.md for detailed use cases and trade-offs.
     """
 
     def __init__(
@@ -100,8 +78,8 @@ class RedisStreamsEventQueue(EventQueue):
             # XGROUP CREATE stream_key group_name 0 MKSTREAM
             await self.redis.xgroup_create(
                 self._stream_key, self.consumer_group, id="0", mkstream=True
-            )
-        except redis.exceptions.ResponseError as e:
+            )  # type: ignore[misc]
+        except Exception as e:  # type: ignore[misc]
             if "BUSYGROUP" not in str(e):  # Group already exists
                 raise
 
@@ -138,7 +116,7 @@ class RedisStreamsEventQueue(EventQueue):
         }
 
         # Add to Redis stream (XADD)
-        await self.redis.xadd(self._stream_key, fields)
+        await self.redis.xadd(self._stream_key, fields)  # type: ignore[misc]
 
     async def dequeue_event(
         self, no_wait: bool = False
@@ -173,24 +151,24 @@ class RedisStreamsEventQueue(EventQueue):
                 {self._stream_key: ">"},
                 count=1,
                 block=timeout,
-            )
+            )  # type: ignore[misc]
 
             if not result or not result[0][1]:  # No messages available
                 raise RuntimeError("No events available")
 
             # Extract message data
-            stream_name, messages = result[0]
+            _, messages = result[0]
             message_id, fields = messages[0]
 
             # Deserialize event data
             event_data = json.loads(fields[b"event_data"].decode())
 
             # Acknowledge the message
-            await self.redis.xack(self._stream_key, self.consumer_group, message_id)
+            await self.redis.xack(self._stream_key, self.consumer_group, message_id)  # type: ignore[misc]
 
             return event_data
 
-        except redis.exceptions.ResponseError as e:
+        except Exception as e:  # type: ignore[misc]
             if "NOGROUP" in str(e):
                 # Consumer group was deleted, recreate it
                 await self._ensure_consumer_group()
@@ -203,7 +181,7 @@ class RedisStreamsEventQueue(EventQueue):
         # Optionally clean up pending messages for this consumer
         try:
             # Get pending messages for this consumer
-            pending = await self.redis.xpending_range(
+            pending = await self.redis.xpending_range(  # type: ignore[misc]
                 self._stream_key,
                 self.consumer_group,
                 min="-",
@@ -217,9 +195,9 @@ class RedisStreamsEventQueue(EventQueue):
                 message_ids = [msg["message_id"] for msg in pending]
                 await self.redis.xack(
                     self._stream_key, self.consumer_group, *message_ids
-                )
+                )  # type: ignore[misc]
 
-        except redis.exceptions.ResponseError:
+        except Exception:  # type: ignore[misc]
             # Consumer group might not exist, ignore
             pass
 

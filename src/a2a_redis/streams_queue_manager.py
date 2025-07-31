@@ -8,7 +8,7 @@ For real-time, fire-and-forget scenarios, consider RedisPubSubQueueManager inste
 
 from typing import Dict, Optional
 
-import redis
+import redis.asyncio as redis
 from a2a.server.events.queue_manager import QueueManager
 from a2a.server.events.event_queue import EventQueue
 
@@ -17,41 +17,10 @@ from .streams_consumer_strategy import ConsumerGroupConfig
 
 
 class RedisStreamsQueueManager(QueueManager):
-    """Redis Streams-backed implementation of the A2A QueueManager interface.
+    """Redis Streams-backed QueueManager for persistent, reliable event delivery.
 
-    This queue manager uses Redis Streams for persistent, reliable event delivery
-    with consumer groups, acknowledgments, and replay capability.
-
-    **Key Features**:
-    - **Persistent storage**: Events remain in streams until explicitly trimmed
-    - **Guaranteed delivery**: Consumer groups with acknowledgments prevent message loss
-    - **Load balancing**: Multiple consumers can share work via consumer groups
-    - **Failure recovery**: Unacknowledged messages can be reclaimed by other consumers
-    - **Event replay**: Historical events can be re-read from any point in time
-    - **Ordering**: Maintains strict insertion order with unique message IDs
-
-    **Use Cases**:
-    - Task event queues requiring reliability
-    - Audit trails and event history
-    - Work distribution systems
-    - Systems requiring failure recovery
-    - Multi-consumer load balancing
-
-    **Configuration Options**:
-    - Consumer group strategies (per-task isolation, shared load balancing)
-    - Custom stream prefixes
-    - Consumer identification
-
-    Example:
-        # Basic streams queue manager
-        manager = RedisStreamsQueueManager(redis_client)
-
-        # With custom consumer configuration
-        config = ConsumerGroupConfig(strategy=ConsumerGroupStrategy.SHARED_LOAD_BALANCING)
-        manager = RedisStreamsQueueManager(redis_client, consumer_config=config)
-
-        # With custom prefix
-        manager = RedisStreamsQueueManager(redis_client, prefix="task_streams:")
+    Provides guaranteed delivery with consumer groups, acknowledgments, and replay
+    capability. See README.md for detailed use cases and trade-offs.
     """
 
     def __init__(

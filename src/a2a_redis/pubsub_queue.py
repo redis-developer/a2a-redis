@@ -38,41 +38,20 @@ to the default Redis Streams implementation. Choose based on your use case:
 """
 
 import json
-import threading
-from typing import Union, Optional, Any
-from queue import Queue, Empty
+import asyncio
+from typing import Union, Optional, Dict, Any
 
-import redis
-from redis.client import PubSub
+import redis.asyncio as redis
+from redis.asyncio.client import PubSub
 from a2a.server.events.event_queue import EventQueue
 from a2a.types import Message, Task, TaskStatusUpdateEvent, TaskArtifactUpdateEvent
 
 
 class RedisPubSubEventQueue(EventQueue):
-    """Redis Pub/Sub-backed implementation of EventQueue.
+    """Redis Pub/Sub-backed EventQueue for real-time, fire-and-forget event delivery.
 
-    This implementation uses Redis Pub/Sub for real-time, fire-and-forget event delivery.
-    Events are delivered immediately to active subscribers but are lost if no subscribers
-    are listening or if subscribers are offline.
-
-    **Key Characteristics**:
-    - **Real-time delivery**: Events delivered immediately to active subscribers
-    - **No persistence**: Events not stored, only delivered to active consumers
-    - **Fire-and-forget**: No acknowledgments or delivery guarantees
-    - **Broadcasting**: All subscribers receive all events
-    - **Low latency**: Minimal overhead for immediate delivery
-
-    **Use Cases**:
-    - Live status updates and notifications
-    - Real-time dashboard updates
-    - System event broadcasting
-    - Non-critical event distribution
-
-    **Not suitable for**:
-    - Critical event processing requiring guarantees
-    - Systems requiring event replay or audit trails
-    - Offline-capable applications
-    - Work queues requiring load balancing
+    Provides immediate event broadcasting with minimal latency but no persistence
+    or delivery guarantees. See README.md for detailed use cases and trade-offs.
     """
 
     def __init__(
@@ -91,48 +70,18 @@ class RedisPubSubEventQueue(EventQueue):
         self._closed = False
         self._channel = f"{prefix}{task_id}"
 
-        # Internal queue for buffering received messages
-        self._message_queue: Queue[Any] = Queue()
-
         # Pub/Sub subscription management
         self._pubsub: Optional[PubSub] = None
-        self._subscriber_thread: Optional[threading.Thread] = None
-        self._setup_subscription()
+        self._setup_complete = False
 
-    def _setup_subscription(self) -> None:
-        """Set up Redis pub/sub subscription and background thread."""
-        if self._closed:
+    async def _ensure_setup(self) -> None:
+        """Ensure pub/sub subscription is set up."""
+        if self._setup_complete or self._closed:
             return
 
-        self._pubsub = self.redis.pubsub()
-        self._pubsub.subscribe(self._channel)
-
-        # Start background thread to listen for messages
-        self._subscriber_thread = threading.Thread(
-            target=self._message_listener, daemon=True
-        )
-        self._subscriber_thread.start()
-
-    def _message_listener(self) -> None:
-        """Background thread that listens for pub/sub messages."""
-        if not self._pubsub:
-            return
-
-        try:
-            for message in self._pubsub.listen():
-                if self._closed:
-                    break
-
-                # Skip subscription confirmation messages
-                if message["type"] != "message":
-                    continue
-
-                # Add message to internal queue
-                self._message_queue.put(message["data"])
-
-        except Exception:
-            # Silently handle connection errors in background thread
-            pass
+        self._pubsub = self.redis.pubsub()  # type: ignore[misc]
+        await self._pubsub.subscribe(self._channel)  # type: ignore[misc]
+        self._setup_complete = True
 
     async def enqueue_event(
         self,
@@ -152,6 +101,9 @@ class RedisPubSubEventQueue(EventQueue):
         if self._closed:
             raise RuntimeError("Cannot enqueue to closed queue")
 
+        # Ensure subscription setup
+        await self._ensure_setup()
+
         # Serialize event - convert to dict if it has model_dump, otherwise assume it's serializable
         if hasattr(event, "model_dump"):
             event_data = event.model_dump()
@@ -164,7 +116,7 @@ class RedisPubSubEventQueue(EventQueue):
         )
 
         # Publish to Redis pub/sub channel
-        await self.redis.publish(self._channel, message)
+        await self.redis.publish(self._channel, message)  # type: ignore[misc]
 
     async def dequeue_event(
         self, no_wait: bool = False
@@ -186,16 +138,33 @@ class RedisPubSubEventQueue(EventQueue):
         if self._closed:
             raise RuntimeError("Cannot dequeue from closed queue")
 
-        timeout = 0 if no_wait else 1  # 1 second timeout for blocking
+        # Ensure subscription setup
+        await self._ensure_setup()
+
+        if not self._pubsub:
+            raise RuntimeError("Pub/sub not initialized")
+
+        timeout = 0.1 if no_wait else 1.0  # Shorter timeout for no_wait
 
         try:
-            message_data = self._message_queue.get(timeout=timeout)
+            # Get message with timeout
+            message: Optional[Dict[str, Any]] = await asyncio.wait_for(  # type: ignore[assignment]
+                self._pubsub.get_message(ignore_subscribe_messages=True),  # type: ignore[misc]
+                timeout=timeout,
+            )
 
-            # Deserialize event data
-            message = json.loads(message_data.decode())
-            return message["event_data"]
+            if message is None:
+                raise RuntimeError("No events available")
 
-        except Empty:
+            # Deserialize event data - message["data"] should be bytes
+            data_bytes = message["data"]  # type: ignore[misc]
+            if isinstance(data_bytes, bytes):
+                message_data = json.loads(data_bytes.decode())
+            else:
+                message_data = json.loads(str(data_bytes))  # type: ignore[misc]
+            return message_data["event_data"]
+
+        except asyncio.TimeoutError:
             raise RuntimeError("No events available")
 
     async def close(self) -> None:
@@ -205,17 +174,14 @@ class RedisPubSubEventQueue(EventQueue):
         # Clean up pub/sub subscription
         if self._pubsub:
             try:
-                self._pubsub.unsubscribe(self._channel)
-                self._pubsub.close()
+                await self._pubsub.unsubscribe(self._channel)  # type: ignore[misc]
+                await self._pubsub.close()  # type: ignore[misc]
             except Exception:
                 pass
             finally:
                 self._pubsub = None
 
-        # Wait for subscriber thread to finish
-        if self._subscriber_thread and self._subscriber_thread.is_alive():
-            self._subscriber_thread.join(timeout=1.0)
-            self._subscriber_thread = None
+                self._setup_complete = False
 
     def is_closed(self) -> bool:
         """Check if the queue is closed."""

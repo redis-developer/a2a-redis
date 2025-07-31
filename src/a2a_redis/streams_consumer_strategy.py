@@ -51,6 +51,8 @@ class ConsumerGroupConfig:
         elif self.strategy == ConsumerGroupStrategy.INSTANCE_ISOLATED:
             return f"processors-{task_id}-{self.instance_id}"
         elif self.strategy == ConsumerGroupStrategy.CUSTOM:
+            if self.custom_group_name is None:
+                raise ValueError("custom_group_name cannot be None for CUSTOM strategy")
             return self.custom_group_name
         else:
             raise ValueError(f"Unknown strategy: {self.strategy}")

@@ -8,7 +8,7 @@ For reliable, persistent event processing, consider RedisStreamsQueueManager ins
 
 from typing import Dict, Optional
 
-import redis
+import redis.asyncio as redis
 from a2a.server.events.queue_manager import QueueManager
 from a2a.server.events.event_queue import EventQueue
 
@@ -16,49 +16,10 @@ from .pubsub_queue import RedisPubSubEventQueue
 
 
 class RedisPubSubQueueManager(QueueManager):
-    """Redis Pub/Sub-backed implementation of the A2A QueueManager interface.
+    """Redis Pub/Sub-backed QueueManager for real-time, fire-and-forget event delivery.
 
-    This queue manager uses Redis Pub/Sub for real-time, fire-and-forget event delivery
-    with natural broadcasting patterns and minimal latency.
-
-    **Key Features**:
-    - **Real-time delivery**: Events delivered immediately to active subscribers
-    - **No persistence**: Events not stored, only delivered to active consumers
-    - **Fire-and-forget**: No acknowledgments or delivery guarantees
-    - **Broadcasting**: All subscribers receive all events
-    - **Low latency**: Minimal overhead for immediate delivery
-    - **Minimal memory usage**: No storage of events
-
-    **Use Cases**:
-    - Live status updates and notifications
-    - Real-time dashboard updates
-    - System event broadcasting
-    - Non-critical event distribution
-    - Low-latency requirements
-    - Simple fan-out scenarios
-
-    **Not suitable for**:
-    - Critical event processing requiring guarantees
-    - Systems requiring event replay or audit trails
-    - Offline-capable applications
-    - Work queues requiring load balancing
-
-    **Behavior Notes**:
-    - Events published before subscribers are active will be lost
-    - All subscribers receive all events (broadcast pattern)
-    - No consumer groups or load balancing
-    - Network partitions can cause message loss
-
-    Example:
-        # Basic pub/sub queue manager
-        manager = RedisPubSubQueueManager(redis_client)
-
-        # With custom channel prefix
-        manager = RedisPubSubQueueManager(redis_client, prefix="notifications:")
-
-        # Get a queue and publish events
-        queue = await manager.create_or_tap("task_123")
-        queue.enqueue_event(event_data)
+    Provides immediate event broadcasting with minimal latency but no persistence
+    or delivery guarantees. See README.md for detailed use cases and trade-offs.
     """
 
     def __init__(self, redis_client: redis.Redis, prefix: str = "pubsub:"):

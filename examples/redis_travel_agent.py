@@ -16,7 +16,7 @@ from a2a.types import (
 # Import our Redis components
 from a2a_redis import (
     RedisTaskStore,
-    RedisQueueManager,
+    RedisStreamsQueueManager,
     RedisPushNotificationConfigStore,
 )
 from a2a_redis.utils import create_redis_client
@@ -54,7 +54,9 @@ def create_redis_components():
 
     # Create Redis-backed components (all working with a2a-sdk interfaces)
     task_store = RedisTaskStore(redis_client, prefix="travel_agent:tasks:")
-    queue_manager = RedisQueueManager(redis_client, prefix="travel_agent:streams:")
+    queue_manager = RedisStreamsQueueManager(
+        redis_client, prefix="travel_agent:streams:"
+    )
     push_config_store = RedisPushNotificationConfigStore(
         redis_client, prefix="travel_agent:push:"
     )

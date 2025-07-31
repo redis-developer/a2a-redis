@@ -17,9 +17,9 @@ from a2a.types import (
 
 from a2a_redis import (
     RedisTaskStore,
-    RedisQueueManager,
+    RedisStreamsQueueManager,
+    RedisPubSubQueueManager,
     RedisPushNotificationConfigStore,
-    QueueType,
     ConsumerGroupStrategy,
     ConsumerGroupConfig,
 )
@@ -64,9 +64,8 @@ def create_streams_components():
     )
 
     task_store = RedisTaskStore(redis_client, prefix="streams_agent:tasks:")
-    queue_manager = RedisQueueManager(
+    queue_manager = RedisStreamsQueueManager(
         redis_client,
-        queue_type=QueueType.STREAMS,  # Explicit (default)
         prefix="streams_agent:events:",
         consumer_config=consumer_config,
     )
@@ -96,11 +95,10 @@ def create_pubsub_components():
     redis_client = create_redis_client(url="redis://localhost:6379/2")
 
     task_store = RedisTaskStore(redis_client, prefix="pubsub_agent:tasks:")
-    queue_manager = RedisQueueManager(
+    queue_manager = RedisPubSubQueueManager(
         redis_client,
-        queue_type=QueueType.PUBSUB,  # Real-time pub/sub
         prefix="pubsub_agent:events:",
-        # Note: consumer_config is ignored for pub/sub
+        # Note: Pub/Sub doesn't use consumer configs
     )
     push_config_store = RedisPushNotificationConfigStore(
         redis_client, prefix="pubsub_agent:push:"
