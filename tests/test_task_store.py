@@ -266,9 +266,6 @@ class TestRedisJSONTaskStore:
         """Test task saving with JSON."""
         from a2a.types import Task
 
-        mock_json = MagicMock()
-        mock_redis.json.return_value = mock_json
-
         # Create Task object from sample data
         task = Task(**sample_task_data)
 
@@ -278,6 +275,8 @@ class TestRedisJSONTaskStore:
         mock_redis.json.assert_called_once()
         # The save method serializes the task using model_dump()
         expected_data = task.model_dump()
+        # Get the mock json object that was already set up in conftest
+        mock_json = mock_redis.json.return_value
         mock_json.set.assert_called_once_with("task:task_123", "$", expected_data)
 
     @pytest.mark.asyncio
@@ -285,9 +284,9 @@ class TestRedisJSONTaskStore:
         """Test retrieving an existing task with JSON."""
         from a2a.types import Task
 
-        mock_json = MagicMock()
+        # Get the mock json object that was already set up in conftest
+        mock_json = mock_redis.json.return_value
         mock_json.get.return_value = sample_task_data
-        mock_redis.json.return_value = mock_json
 
         store = RedisJSONTaskStore(mock_redis)
         result = await store.get("task_123")
@@ -321,9 +320,9 @@ class TestRedisJSONTaskStore:
     @pytest.mark.asyncio
     async def test_update_task_exists(self, mock_redis, sample_task_data):
         """Test updating an existing task with JSON."""
-        mock_json = MagicMock()
+        # Get the mock json object that was already set up in conftest
+        mock_json = mock_redis.json.return_value
         mock_json.get.return_value = sample_task_data
-        mock_redis.json.return_value = mock_json
 
         from a2a.types import TaskStatus, TaskState
 
@@ -339,9 +338,9 @@ class TestRedisJSONTaskStore:
     @pytest.mark.asyncio
     async def test_update_task_not_exists(self, mock_redis):
         """Test updating a non-existent task with JSON."""
-        mock_json = MagicMock()
+        # Get the mock json object that was already set up in conftest
+        mock_json = mock_redis.json.return_value
         mock_json.get.return_value = None
-        mock_redis.json.return_value = mock_json
 
         store = RedisJSONTaskStore(mock_redis)
         result = await store.update_task("nonexistent", {"status": "completed"})

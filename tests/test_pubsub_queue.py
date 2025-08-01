@@ -12,20 +12,14 @@ class TestRedisPubSubEventQueue:
 
     def test_init(self, mock_redis):
         """Test RedisPubSubEventQueue initialization."""
-        # Mock pubsub to avoid actual Redis calls during init
-        mock_pubsub = MagicMock()
-        mock_redis.pubsub.return_value = mock_pubsub
-
         queue = RedisPubSubEventQueue(mock_redis, "task_123", prefix="test:")
         assert queue.redis == mock_redis
         assert queue.task_id == "task_123"
         assert queue.prefix == "test:"
         assert queue._channel == "test:task_123"
         assert not queue._closed
-
-        # Should have set up subscription
-        mock_redis.pubsub.assert_called_once()
-        mock_pubsub.subscribe.assert_called_once_with("test:task_123")
+        assert queue._pubsub is None  # Lazy initialization
+        assert not queue._setup_complete
 
     @pytest.mark.asyncio
     async def test_enqueue_event_simple(self, mock_redis):
