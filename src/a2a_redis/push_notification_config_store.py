@@ -1,9 +1,9 @@
 """Redis-backed push notification config store implementation for the A2A Python SDK."""
 
 import json
-from typing import List, Optional, Dict
+from typing import List, Optional
 
-import redis
+import redis.asyncio as redis
 from a2a.server.tasks.push_notification_config_store import PushNotificationConfigStore
 from a2a.types import PushNotificationConfig
 
@@ -34,14 +34,22 @@ class RedisPushNotificationConfigStore(PushNotificationConfigStore):
         Returns:
             List of PushNotificationConfig objects
         """
-        configs_data: Dict[bytes, bytes] = self.redis.hgetall(self._task_key(task_id))  # type: ignore[assignment]
+        configs_data = await self.redis.hgetall(self._task_key(task_id))  # type: ignore[misc]
         if not configs_data:
             return []
 
         configs: List[PushNotificationConfig] = []
-        for config_id_bytes, config_json_bytes in configs_data.items():
-            config_id = config_id_bytes.decode()
-            config_json = config_json_bytes.decode()
+        for config_id_bytes, config_json_bytes in configs_data.items():  # type: ignore[misc]
+            config_id = (
+                config_id_bytes.decode()
+                if isinstance(config_id_bytes, bytes)
+                else str(config_id_bytes)  # type: ignore[misc]
+            )
+            config_json = (
+                config_json_bytes.decode()
+                if isinstance(config_json_bytes, bytes)
+                else str(config_json_bytes)  # type: ignore[misc]
+            )
 
             try:
                 config_data = json.loads(config_json)
@@ -74,7 +82,7 @@ class RedisPushNotificationConfigStore(PushNotificationConfigStore):
             del config_data["id"]
 
         config_json = json.dumps(config_data)
-        self.redis.hset(self._task_key(task_id), config_id, config_json)  # type: ignore[misc]
+        await self.redis.hset(self._task_key(task_id), config_id, config_json)  # type: ignore[misc]
 
     async def delete_info(self, task_id: str, config_id: Optional[str] = None) -> None:
         """Delete push notification config(s) for a task (a2a-sdk interface).
@@ -85,7 +93,7 @@ class RedisPushNotificationConfigStore(PushNotificationConfigStore):
         """
         if config_id:
             # Delete specific config
-            self.redis.hdel(self._task_key(task_id), config_id)
+            await self.redis.hdel(self._task_key(task_id), config_id)  # type: ignore[misc]
         else:
             # Delete all configs for the task
-            self.redis.delete(self._task_key(task_id))
+            await self.redis.delete(self._task_key(task_id))  # type: ignore[misc]

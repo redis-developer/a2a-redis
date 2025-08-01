@@ -2,14 +2,15 @@
 
 Redis components for the Agent-to-Agent (A2A) Python SDK.
 
-This package provides Redis-backed implementations of core A2A components for persistent task storage, event queue management, and push notification configuration using Redis.
+This package provides Redis-backed implementations of core A2A components with a **two-tier queue architecture** for persistent task storage, reliable event queue management, and push notification configuration using Redis.
 
 ## Features
 
-- **RedisTaskStore**: Redis-backed task storage using Redis hashes or RedisJSON
-- **RedisQueueManager**: Event queue management using Redis Lists with async support
+- **RedisTaskStore & RedisJSONTaskStore**: Redis-backed task storage using hashes or JSON
+- **RedisStreamsQueueManager & RedisStreamsEventQueue**: Persistent, reliable event queues with consumer groups
+- **RedisPubSubQueueManager & RedisPubSubEventQueue**: Real-time, low-latency event broadcasting
 - **RedisPushNotificationConfigStore**: Task-based push notification configuration storage
-- **Connection Management**: Robust Redis connection handling with automatic retry and health monitoring
+- **Consumer Group Strategies for Streams**: Flexible load balancing and instance isolation patterns
 
 ## Installation
 
@@ -20,7 +21,7 @@ pip install a2a-redis
 ## Quick Start
 
 ```python
-from a2a_redis import RedisTaskStore, RedisQueueManager, RedisPushNotificationConfigStore
+from a2a_redis import RedisTaskStore, RedisStreamsQueueManager, RedisPushNotificationConfigStore
 from a2a_redis.utils import create_redis_client
 from a2a.server.request_handlers import DefaultRequestHandler
 from a2a.server.apps import A2AStarletteApplication
@@ -30,7 +31,7 @@ redis_client = create_redis_client(url="redis://localhost:6379/0", max_connectio
 
 # Initialize Redis components
 task_store = RedisTaskStore(redis_client, prefix="myapp:tasks:")
-queue_manager = RedisQueueManager(redis_client, prefix="myapp:queues:")
+queue_manager = RedisStreamsQueueManager(redis_client, prefix="myapp:queues:")
 push_config_store = RedisPushNotificationConfigStore(redis_client, prefix="myapp:push:")
 
 # Use with A2A request handler
@@ -48,59 +49,162 @@ server = A2AStarletteApplication(
 )
 ```
 
+## Architecture: Two-Tier Queue System
+
+This package implements a **two-tier architecture** that separates high-level queue management from direct Redis implementations:
+
+### Tier 1 - Queue Managers (High-Level Abstractions)
+- `RedisStreamsQueueManager` - Manages Redis Streams-based queues
+- `RedisPubSubQueueManager` - Manages Redis Pub/Sub-based queues
+- Both implement the A2A SDK's `QueueManager` interface
+
+### Tier 2 - Event Queues (Direct Implementations)
+- `RedisStreamsEventQueue` - Direct Redis Streams queue implementation
+- `RedisPubSubEventQueue` - Direct Redis Pub/Sub queue implementation
+- Both implement the A2A SDK's `EventQueue` interface
+
+## Queue Manager Types: Streams vs Pub/Sub
+
+### RedisStreamsQueueManager
+
+**Key Features:**
+- **Persistent storage**: Events remain in streams until explicitly trimmed
+- **Guaranteed delivery**: Consumer groups with acknowledgments prevent message loss
+- **Load balancing**: Multiple consumers can share work via consumer groups
+- **Failure recovery**: Unacknowledged messages can be reclaimed by other consumers
+- **Event replay**: Historical events can be re-read from any point in time
+- **Ordering**: Maintains strict insertion order with unique message IDs
+
+**Use Cases:**
+- Task event queues requiring reliability
+- Audit trails and event history
+- Work distribution systems
+- Systems requiring failure recovery
+- Multi-consumer load balancing
+
+**Trade-offs:**
+- Higher memory usage (events persist)
+- More complex setup (consumer groups)
+- Slightly higher latency than pub/sub
+
+### RedisPubSubQueueManager
+
+**Key Features:**
+- **Real-time delivery**: Events delivered immediately to active subscribers
+- **No persistence**: Events not stored, only delivered to active consumers
+- **Fire-and-forget**: No acknowledgments or delivery guarantees
+- **Broadcasting**: All subscribers receive all events
+- **Low latency**: Minimal overhead for immediate delivery
+- **Minimal memory usage**: No storage of events
+
+**Use Cases:**
+- Live status updates and notifications
+- Real-time dashboard updates
+- System event broadcasting
+- Non-critical event distribution
+- Low-latency requirements
+- Simple fan-out scenarios
+
+**Not suitable for:**
+- Critical event processing requiring guarantees
+- Systems requiring event replay or audit trails
+- Offline-capable applications
+- Work queues requiring load balancing
+
 ## Components
 
-### RedisTaskStore
+### Task Storage
 
-Stores task data in Redis using hashes for simple data or RedisJSON for complex nested data. Implements the A2A TaskStore interface.
+#### RedisTaskStore
+Stores task data in Redis using hashes with JSON serialization. Works with any Redis server.
 
 ```python
-from a2a_redis import RedisTaskStore, RedisJSONTaskStore
+from a2a_redis import RedisTaskStore
 
-# Using Redis hashes (works with any Redis server)
 task_store = RedisTaskStore(redis_client, prefix="mytasks:")
 
-# Using RedisJSON (requires RedisJSON module)
-json_task_store = RedisJSONTaskStore(redis_client, prefix="mytasks:")
-
 # A2A TaskStore interface methods
-task_store.save("task123", {"status": "pending", "data": {"key": "value"}})
-task = task_store.get("task123")
-success = task_store.delete("task123")
+await task_store.save("task123", {"status": "pending", "data": {"key": "value"}})
+task = await task_store.get("task123")
+success = await task_store.delete("task123")
 
 # List all task IDs (utility method)
-task_ids = task_store.list_task_ids()
+task_ids = await task_store.list_task_ids()
 ```
 
-### RedisQueueManager
+#### RedisJSONTaskStore
+Stores task data using Redis's JSON module for native JSON operations and complex nested data.
 
-Manages event queues using Redis Lists for task-based event queues. Implements the A2A QueueManager interface with async support.
+```python
+from a2a_redis import RedisJSONTaskStore
+
+# Requires Redis 8 or RedisJSON module
+json_task_store = RedisJSONTaskStore(redis_client, prefix="mytasks:")
+
+# Same interface as RedisTaskStore but with native JSON support
+await json_task_store.save("task123", {"complex": {"nested": {"data": "value"}}})
+```
+
+### Queue Managers
+
+Both queue managers implement the A2A QueueManager interface with full async support:
 
 ```python
 import asyncio
-from a2a_redis import RedisQueueManager
+from a2a_redis import RedisStreamsQueueManager, RedisPubSubQueueManager
+from a2a_redis.streams_consumer_strategy import ConsumerGroupConfig, ConsumerGroupStrategy
 
-queue_manager = RedisQueueManager(redis_client, prefix="myapp:queues:")
+# Choose based on your requirements:
+
+# For reliable, persistent processing
+streams_manager = RedisStreamsQueueManager(redis_client, prefix="myapp:streams:")
+
+# For real-time, low-latency broadcasting
+pubsub_manager = RedisPubSubQueueManager(redis_client, prefix="myapp:pubsub:")
+
+# With custom consumer group configuration (streams only)
+config = ConsumerGroupConfig(strategy=ConsumerGroupStrategy.SHARED_LOAD_BALANCING)
+streams_manager = RedisStreamsQueueManager(redis_client, consumer_config=config)
 
 async def main():
-    # Create or get existing queue for a task
-    queue = await queue_manager.create_or_tap("task123")
+    # Same interface for both managers
+    queue = await streams_manager.create_or_tap("task123")
 
     # Enqueue events
-    queue.enqueue_event({"type": "progress", "message": "Task started"})
-    queue.enqueue_event({"type": "progress", "message": "50% complete"})
+    await queue.enqueue_event({"type": "progress", "message": "Task started"})
+    await queue.enqueue_event({"type": "progress", "message": "50% complete"})
 
     # Dequeue events
     try:
-        event = queue.dequeue_event(no_wait=True)  # Non-blocking
+        event = await queue.dequeue_event(no_wait=True)  # Non-blocking
         print(f"Got event: {event}")
+        await queue.task_done()  # Acknowledge the message (streams only)
     except RuntimeError:
         print("No events available")
 
     # Close queue when done
-    await queue_manager.close("task123")
+    await queue.close()
 
 asyncio.run(main())
+```
+
+### Consumer Group Strategies
+
+The Streams queue manager supports different consumer group strategies:
+
+```python
+from a2a_redis.streams_consumer_strategy import ConsumerGroupStrategy, ConsumerGroupConfig
+
+# Multiple instances share work across a single consumer group
+config = ConsumerGroupConfig(strategy=ConsumerGroupStrategy.SHARED_LOAD_BALANCING)
+
+# Each instance gets its own consumer group
+config = ConsumerGroupConfig(strategy=ConsumerGroupStrategy.INSTANCE_ISOLATED)
+
+# Custom consumer group name
+config = ConsumerGroupConfig(strategy=ConsumerGroupStrategy.CUSTOM, group_name="my_group")
+
+streams_manager = RedisStreamsQueueManager(redis_client, consumer_config=config)
 ```
 
 ### RedisPushNotificationConfigStore
@@ -121,24 +225,24 @@ config = PushNotificationConfig(
 )
 
 # A2A interface methods
-config_store.set_info("task123", config)
+await config_store.set_info("task123", config)
 
 # Get all configs for a task
-configs = config_store.get_info("task123")
+configs = await config_store.get_info("task123")
 for config in configs:
     print(f"Config {config.id}: {config.url}")
 
 # Delete specific config or all configs for a task
-config_store.delete_info("task123", "webhook_1")  # Delete specific
-config_store.delete_info("task123")  # Delete all
+await config_store.delete_info("task123", "webhook_1")  # Delete specific
+await config_store.delete_info("task123")  # Delete all
 ```
 
 ## Connection Management
 
-The package includes robust connection management utilities:
+The package includes robust connection management utilities with retry logic and health monitoring:
 
 ```python
-from a2a_redis.utils import RedisConnectionManager, create_redis_client
+from a2a_redis.utils import RedisConnectionManager, create_redis_client, redis_retry, safe_redis_operation
 
 # Create managed Redis client
 redis_client = create_redis_client(
@@ -155,6 +259,17 @@ connection_manager = RedisConnectionManager(
     retry_on_timeout=True
 )
 redis_client = connection_manager.client
+
+# Use retry decorator for custom operations
+@redis_retry(max_retries=3, backoff_factor=1.0)
+async def my_redis_operation(redis_client):
+    return await redis_client.get("mykey")
+
+# Safe operations with fallback values
+result = await safe_redis_operation(
+    lambda: redis_client.get("mykey"),
+    fallback="default_value"
+)
 ```
 
 ## Requirements
@@ -167,6 +282,7 @@ redis_client = connection_manager.client
 ## Optional Dependencies
 
 - RedisJSON module for `RedisJSONTaskStore` (enhanced nested data support)
+- Redis Stack or Redis with modules for full feature support
 
 ## Development
 
@@ -191,8 +307,24 @@ uv run pyright src/
 # Install pre-commit hooks
 uv run pre-commit install
 
-# Run example
+# Run examples
+uv run python examples/basic_usage.py
 uv run python examples/redis_travel_agent.py
+```
+
+## Testing
+
+Tests use Redis database 15 for isolation and include both mock and real Redis integration tests:
+
+```bash
+# Run all tests
+uv run pytest
+
+# Run specific test file
+uv run pytest tests/test_streams_queue_manager.py -v
+
+# Run with coverage
+uv run pytest --cov=a2a_redis --cov-report=term-missing
 ```
 
 ## License

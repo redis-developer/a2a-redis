@@ -1,6 +1,7 @@
 """Tests for RedisTaskStore and RedisJSONTaskStore."""
 
 import json
+import pytest
 from unittest.mock import MagicMock
 
 from a2a_redis.task_store import RedisTaskStore, RedisJSONTaskStore
@@ -20,10 +21,16 @@ class TestRedisTaskStore:
         store = RedisTaskStore(mock_redis, prefix="task:")
         assert store._task_key("123") == "task:123"
 
-    def test_save_task(self, mock_redis, sample_task_data):
-        """Test task saving (a2a-sdk interface)."""
+    @pytest.mark.asyncio
+    async def test_save_task(self, mock_redis, sample_task_data):
+        """Test task saving."""
+        from a2a.types import Task
+
+        # Create Task object from sample data
+        task = Task(**sample_task_data)
+
         store = RedisTaskStore(mock_redis)
-        store.save("task_123", sample_task_data)
+        await store.save(task)
 
         # Verify hset was called with serialized data
         mock_redis.hset.assert_called_once()
@@ -36,52 +43,39 @@ class TestRedisTaskStore:
         assert isinstance(mapping["metadata"], str)  # Should be JSON string
         assert json.loads(mapping["metadata"]) == sample_task_data["metadata"]
 
-    def test_create_task_backward_compatibility(self, mock_redis, sample_task_data):
-        """Test backward compatibility method."""
-        store = RedisTaskStore(mock_redis)
-        store.create_task("task_123", sample_task_data)
+    @pytest.mark.asyncio
+    async def test_get_task_exists(self, mock_redis, sample_task_data):
+        """Test retrieving an existing task."""
 
-        # Should call save internally
-        mock_redis.hset.assert_called_once()
-
-    def test_get_task_exists(self, mock_redis, sample_task_data):
-        """Test retrieving an existing task (a2a-sdk interface)."""
-        # Mock Redis response
+        # Mock Redis response in the format RedisTaskStore would actually store it
         mock_redis.hgetall.return_value = {
             b"id": b"task_123",
-            b"status": b"pending",
-            b"description": b"Test task",
+            b"context_id": b"context_456",
+            b"status": json.dumps(
+                {"_type": "a2a.types.TaskStatus", "_data": {"state": "submitted"}}
+            ).encode(),
             b"metadata": json.dumps(sample_task_data["metadata"]).encode(),
         }
 
         store = RedisTaskStore(mock_redis)
-        result = store.get("task_123")
+        result = await store.get("task_123")
 
         assert result is not None
-        assert result["id"] == "task_123"
-        assert result["status"] == "pending"
-        assert result["metadata"] == sample_task_data["metadata"]
+        assert result.id == "task_123"
+        assert result.context_id == "context_456"
+        assert result.metadata == sample_task_data["metadata"]
         mock_redis.hgetall.assert_called_once_with("task:task_123")
 
-    def test_get_task_not_exists(self, mock_redis):
-        """Test retrieving a non-existent task (a2a-sdk interface)."""
+    @pytest.mark.asyncio
+    async def test_get_task_not_exists(self, mock_redis):
+        """Test retrieving a non-existent task."""
         mock_redis.hgetall.return_value = {}
 
         store = RedisTaskStore(mock_redis)
-        result = store.get("nonexistent")
+        result = await store.get("nonexistent")
 
         assert result is None
         mock_redis.hgetall.assert_called_once_with("task:nonexistent")
-
-    def test_get_task_backward_compatibility(self, mock_redis, sample_task_data):
-        """Test backward compatibility method."""
-        mock_redis.hgetall.return_value = {b"id": b"task_123", b"status": b"pending"}
-
-        store = RedisTaskStore(mock_redis)
-        result = store.get_task("task_123")
-
-        assert result is not None
-        assert result["id"] == "task_123"
 
     def test_serialize_data_edge_cases(self, mock_redis):
         """Test serialization edge cases."""
@@ -102,7 +96,7 @@ class TestRedisTaskStore:
         assert serialized["string"] == "test"
         assert serialized["number"] == "42"
         assert serialized["boolean"] == "True"
-        assert serialized["none"] == "None"
+        assert serialized["none"] == "null"
         assert json.loads(serialized["list"]) == [1, 2, 3]
         assert json.loads(serialized["dict"]) == {"nested": "value"}
 
@@ -129,85 +123,78 @@ class TestRedisTaskStore:
         assert result["json_dict"] == {"key": "value"}
         assert result["invalid_json"] == '{"incomplete"'  # Falls back to string
 
-    def test_update_task_exists(self, mock_redis):
+    @pytest.mark.asyncio
+    async def test_update_task_exists(self, mock_redis):
         """Test updating an existing task."""
         mock_redis.exists.return_value = True
 
         store = RedisTaskStore(mock_redis)
         updates = {"status": "completed", "metadata": {"updated": True}}
-        result = store.update_task("task_123", updates)
+        result = await store.update_task("task_123", updates)
 
         assert result is True
         mock_redis.exists.assert_called_once_with("task:task_123")
         mock_redis.hset.assert_called_once()
 
-    def test_update_task_not_exists(self, mock_redis):
+    @pytest.mark.asyncio
+    async def test_update_task_not_exists(self, mock_redis):
         """Test updating a non-existent task."""
         mock_redis.exists.return_value = False
 
         store = RedisTaskStore(mock_redis)
-        result = store.update_task("nonexistent", {"status": "completed"})
+        result = await store.update_task("nonexistent", {"status": "completed"})
 
         assert result is False
         mock_redis.exists.assert_called_once_with("task:nonexistent")
         mock_redis.hset.assert_not_called()
 
-    def test_delete_task(self, mock_redis):
-        """Test task deletion (a2a-sdk interface)."""
+    @pytest.mark.asyncio
+    async def test_delete_task(self, mock_redis):
+        """Test task deletion."""
         mock_redis.delete.return_value = 1
 
         store = RedisTaskStore(mock_redis)
-        result = store.delete("task_123")
-
-        assert result is True
+        await store.delete("task_123")
         mock_redis.delete.assert_called_once_with("task:task_123")
 
-    def test_delete_task_not_exists(self, mock_redis):
-        """Test deleting a non-existent task (a2a-sdk interface)."""
+    @pytest.mark.asyncio
+    async def test_delete_task_not_exists(self, mock_redis):
+        """Test deleting a non-existent task."""
         mock_redis.delete.return_value = 0
 
         store = RedisTaskStore(mock_redis)
-        result = store.delete("nonexistent")
-
-        assert result is False
+        await store.delete("nonexistent")
         mock_redis.delete.assert_called_once_with("task:nonexistent")
 
-    def test_delete_task_backward_compatibility(self, mock_redis):
-        """Test backward compatibility method."""
-        mock_redis.delete.return_value = 1
-
-        store = RedisTaskStore(mock_redis)
-        result = store.delete_task("task_123")
-
-        assert result is True
-        mock_redis.delete.assert_called_once_with("task:task_123")
-
-    def test_list_tasks(self, mock_redis):
-        """Test listing tasks."""
+    @pytest.mark.asyncio
+    async def test_list_task_ids(self, mock_redis):
+        """Test listing task IDs."""
         mock_redis.keys.return_value = [b"task:123", b"task:456", b"task:789"]
 
         store = RedisTaskStore(mock_redis)
-        result = store.list_tasks()
+        result = await store.list_task_ids()
 
         assert result == ["123", "456", "789"]
         mock_redis.keys.assert_called_once_with("task:*")
 
-    def test_list_tasks_with_pattern(self, mock_redis):
-        """Test listing tasks with pattern."""
+    @pytest.mark.asyncio
+    async def test_list_task_ids_with_pattern(self, mock_redis):
+        """Test listing task IDs with pattern."""
         mock_redis.keys.return_value = [b"task:user_123", b"task:user_456"]
 
         store = RedisTaskStore(mock_redis)
-        result = store.list_tasks("user_*")
+        result = await store.list_task_ids("user_*")
 
         assert result == ["user_123", "user_456"]
         mock_redis.keys.assert_called_once_with("task:user_*")
 
-    def test_task_exists(self, mock_redis):
+    @pytest.mark.asyncio
+    async def test_task_exists(self, mock_redis):
         """Test checking if task exists."""
         mock_redis.exists.return_value = True
 
         store = RedisTaskStore(mock_redis)
-        result = store.task_exists("task_123")
+        result = await store.task_exists("task_123")
 
         assert result is True
         mock_redis.exists.assert_called_once_with("task:task_123")
@@ -216,55 +203,53 @@ class TestRedisTaskStore:
 class TestRedisTaskStoreIntegration:
     """Integration tests for RedisTaskStore with real Redis."""
 
-    def test_full_task_lifecycle(self, task_store, sample_task_data):
+    @pytest.mark.asyncio
+    async def test_full_task_lifecycle(self, task_store, sample_task_data):
         """Test complete task lifecycle with real Redis."""
-        task_id = "integration_test_task"
+        from a2a.types import Task, TaskStatus, TaskState
+
+        # Create task with different ID to avoid conflicts
+        task_data = sample_task_data.copy()
+        task_data["id"] = "integration_test_task"
+        task = Task(**task_data)
+        task_id = task.id
 
         # Task should not exist initially
-        assert not task_store.task_exists(task_id)
-        assert task_store.get(task_id) is None
+        assert not await task_store.task_exists(task_id)
+        assert await task_store.get(task_id) is None
 
-        # Save task (a2a-sdk interface)
-        task_store.save(task_id, sample_task_data)
-        assert task_store.task_exists(task_id)
+        # Save task
+        await task_store.save(task)
+        assert await task_store.task_exists(task_id)
 
-        # Retrieve task (a2a-sdk interface)
-        retrieved_task = task_store.get(task_id)
+        # Retrieve task
+        retrieved_task = await task_store.get(task_id)
         assert retrieved_task is not None
-        assert retrieved_task["id"] == sample_task_data["id"]
-        assert retrieved_task["status"] == sample_task_data["status"]
-        assert retrieved_task["metadata"] == sample_task_data["metadata"]
+        assert retrieved_task.id == task.id
+        assert retrieved_task.status.state == task.status.state
+        assert retrieved_task.metadata == task.metadata
 
-        # Update task (convenience method)
-        updates = {"status": "in_progress", "progress": 50}
-        assert task_store.update_task(task_id, updates)
+        # Update task
+        updates = {
+            "status": TaskStatus(state=TaskState.working),
+            "metadata": {"progress": 50},
+        }
+        assert await task_store.update_task(task_id, updates)
 
-        updated_task = task_store.get(task_id)
-        assert updated_task["status"] == "in_progress"
-        # Numbers are stored as strings in Redis but deserialized as original type
-        assert updated_task["progress"] == "50" or updated_task["progress"] == 50
+        updated_task = await task_store.get(task_id)
+        assert updated_task is not None
+        assert updated_task.status.state == TaskState.working
+        # Check that metadata was updated
+        assert updated_task.metadata["progress"] == 50
 
-        # List tasks (convenience method)
-        task_list = task_store.list_tasks()
+        # List tasks
+        task_list = await task_store.list_task_ids()
         assert task_id in task_list
 
-        # Delete task (a2a-sdk interface)
-        assert task_store.delete(task_id)
-        assert not task_store.task_exists(task_id)
-        assert task_store.get(task_id) is None
-
-    def test_backward_compatibility_methods(self, task_store, sample_task_data):
-        """Test that backward compatibility methods work."""
-        task_id = "backward_compat_test"
-
-        # Use old interface methods
-        task_store.create_task(task_id, sample_task_data)
-        retrieved = task_store.get_task(task_id)
-        assert retrieved is not None
-        assert retrieved["id"] == sample_task_data["id"]
-
-        # Clean up
-        task_store.delete_task(task_id)
+        # Delete task
+        await task_store.delete(task_id)
+        assert not await task_store.task_exists(task_id)
+        assert await task_store.get(task_id) is None
 
 
 class TestRedisJSONTaskStore:
@@ -276,83 +261,110 @@ class TestRedisJSONTaskStore:
         assert store.redis == mock_redis
         assert store.prefix == "json:"
 
-    def test_save_task(self, mock_redis, sample_task_data):
-        """Test task saving with JSON (a2a-sdk interface)."""
-        mock_json = MagicMock()
-        mock_redis.json.return_value = mock_json
+    @pytest.mark.asyncio
+    async def test_save_task(self, mock_redis, sample_task_data):
+        """Test task saving with JSON."""
+        from a2a.types import Task
+
+        # Create Task object from sample data
+        task = Task(**sample_task_data)
 
         store = RedisJSONTaskStore(mock_redis)
-        store.save("task_123", sample_task_data)
+        await store.save(task)
 
         mock_redis.json.assert_called_once()
-        mock_json.set.assert_called_once_with("task:task_123", "$", sample_task_data)
+        # The save method serializes the task using model_dump()
+        expected_data = task.model_dump()
+        # Get the mock json object that was already set up in conftest
+        mock_json = mock_redis.json.return_value
+        mock_json.set.assert_called_once_with("task:task_123", "$", expected_data)
 
-    def test_create_task_backward_compatibility(self, mock_redis, sample_task_data):
-        """Test backward compatibility method."""
-        mock_json = MagicMock()
-        mock_redis.json.return_value = mock_json
+    @pytest.mark.asyncio
+    async def test_get_task_exists(self, mock_redis, sample_task_data):
+        """Test retrieving an existing task with JSON."""
+        from a2a.types import Task
 
-        store = RedisJSONTaskStore(mock_redis)
-        store.create_task("task_123", sample_task_data)
-
-        mock_redis.json.assert_called_once()
-        mock_json.set.assert_called_once_with("task:task_123", "$", sample_task_data)
-
-    def test_get_task_exists(self, mock_redis, sample_task_data):
-        """Test retrieving an existing task with JSON (a2a-sdk interface)."""
-        mock_json = MagicMock()
+        # Get the mock json object that was already set up in conftest
+        mock_json = mock_redis.json.return_value
         mock_json.get.return_value = sample_task_data
-        mock_redis.json.return_value = mock_json
 
         store = RedisJSONTaskStore(mock_redis)
-        result = store.get("task_123")
+        result = await store.get("task_123")
 
-        assert result == sample_task_data
+        assert isinstance(result, Task)
+        assert result.id == "task_123"
+        assert result.context_id == "context_456"
         mock_json.get.assert_called_once_with("task:task_123")
 
-    def test_get_task_redis_error(self, mock_redis):
+    @pytest.mark.asyncio
+    async def test_get_task_redis_error(self, mock_redis):
         """Test retrieving task when Redis JSON operation fails."""
         mock_json = MagicMock()
         mock_json.get.side_effect = Exception("Redis error")
         mock_redis.json.return_value = mock_json
 
         store = RedisJSONTaskStore(mock_redis)
-        result = store.get("task_123")
+        result = await store.get("task_123")
 
         assert result is None
 
-    def test_delete_task(self, mock_redis):
-        """Test task deletion with JSON (a2a-sdk interface)."""
+    @pytest.mark.asyncio
+    async def test_delete_task(self, mock_redis):
+        """Test task deletion with JSON."""
         mock_redis.delete.return_value = 1
 
         store = RedisJSONTaskStore(mock_redis)
-        result = store.delete("task_123")
-
-        assert result is True
+        await store.delete("task_123")
         mock_redis.delete.assert_called_once_with("task:task_123")
 
-    def test_update_task_exists(self, mock_redis, sample_task_data):
+    @pytest.mark.asyncio
+    async def test_update_task_exists(self, mock_redis, sample_task_data):
         """Test updating an existing task with JSON."""
-        mock_json = MagicMock()
+        # Get the mock json object that was already set up in conftest
+        mock_json = mock_redis.json.return_value
         mock_json.get.return_value = sample_task_data
-        mock_redis.json.return_value = mock_json
+
+        from a2a.types import TaskStatus, TaskState
 
         store = RedisJSONTaskStore(mock_redis)
-        updates = {"status": "completed"}
-        result = store.update_task("task_123", updates)
+        updates = {"status": TaskStatus(state=TaskState.completed)}
+        result = await store.update_task("task_123", updates)
 
         assert result is True
         # Should fetch, update, and save
         mock_json.get.assert_called_once_with("task:task_123")
         mock_json.set.assert_called_once()
 
-    def test_update_task_not_exists(self, mock_redis):
+    @pytest.mark.asyncio
+    async def test_update_task_not_exists(self, mock_redis):
         """Test updating a non-existent task with JSON."""
-        mock_json = MagicMock()
+        # Get the mock json object that was already set up in conftest
+        mock_json = mock_redis.json.return_value
         mock_json.get.return_value = None
-        mock_redis.json.return_value = mock_json
 
         store = RedisJSONTaskStore(mock_redis)
-        result = store.update_task("nonexistent", {"status": "completed"})
+        result = await store.update_task("nonexistent", {"status": "completed"})
 
         assert result is False
+
+    @pytest.mark.asyncio
+    async def test_list_task_ids(self, mock_redis):
+        """Test listing task IDs."""
+        mock_redis.keys.return_value = [b"task:123", b"task:456"]
+
+        store = RedisJSONTaskStore(mock_redis)
+        result = await store.list_task_ids()
+
+        assert result == ["123", "456"]
+        mock_redis.keys.assert_called_once_with("task:*")
+
+    @pytest.mark.asyncio
+    async def test_task_exists(self, mock_redis):
+        """Test checking if task exists."""
+        mock_redis.exists.return_value = True
+
+        store = RedisJSONTaskStore(mock_redis)
+        result = await store.task_exists("task_123")
+
+        assert result is True
+        mock_redis.exists.assert_called_once_with("task:task_123")
