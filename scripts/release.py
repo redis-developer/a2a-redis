@@ -121,6 +121,15 @@ class ReleaseManager:
 
         version = result.stdout.strip()
         print(f"Current version: {version}")
+
+        # Check if this is a local version (contains +)
+        if "+" in version and not version.endswith("+dirty"):
+            print("⚠️  Warning: This is a development version with local identifier")
+            print("PyPI doesn't accept local versions. To create a proper release:")
+            print("1. Create a git tag: git tag v0.1.0")
+            print("2. Re-run this script")
+            return None
+
         return version
 
     def publish_to_pypi(self, test_pypi: bool = False) -> bool:
