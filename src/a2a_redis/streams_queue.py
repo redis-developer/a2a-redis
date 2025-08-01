@@ -30,13 +30,13 @@ import json
 from typing import Optional, Union
 
 import redis.asyncio as redis
-from a2a.server.events.event_queue import EventQueue
 from a2a.types import Message, Task, TaskStatusUpdateEvent, TaskArtifactUpdateEvent
 
+from .event_queue_protocol import EventQueueProtocol
 from .streams_consumer_strategy import ConsumerGroupConfig
 
 
-class RedisStreamsEventQueue(EventQueue):
+class RedisStreamsEventQueue:
     """Redis Streams-backed EventQueue for persistent, reliable event delivery.
 
     Provides guaranteed delivery with consumer groups, acknowledgments, and replay
@@ -205,7 +205,7 @@ class RedisStreamsEventQueue(EventQueue):
         """Check if the queue is closed."""
         return self._closed
 
-    def tap(self) -> "EventQueue":
+    def tap(self) -> "EventQueueProtocol":
         """Create a tap (copy) of this queue.
 
         Creates a new queue with the same stream but different consumer ID

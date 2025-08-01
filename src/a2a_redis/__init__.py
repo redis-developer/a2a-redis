@@ -44,6 +44,7 @@ from .pubsub_queue import RedisPubSubEventQueue
 from .task_store import RedisJSONTaskStore, RedisTaskStore
 from .streams_consumer_strategy import ConsumerGroupStrategy, ConsumerGroupConfig
 from .queue_types import QueueType
+from .event_queue_protocol import EventQueueProtocol
 
 __version__ = "0.1.0"
 
@@ -62,4 +63,6 @@ __all__ = [
     "ConsumerGroupStrategy",
     "ConsumerGroupConfig",
     "QueueType",
+    # Protocols
+    "EventQueueProtocol",
 ]

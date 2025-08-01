@@ -2,7 +2,7 @@
 
 Redis components for the Agent-to-Agent (A2A) Python SDK.
 
-This package provides Redis-backed implementations of core A2A components with a **two-tier queue architecture** for persistent task storage, reliable event queue management, and push notification configuration using Redis.
+This package provides Redis-backed implementations of core A2A components for persistent task storage, reliable event queue management, and push notification configuration using Redis.
 
 ## Features
 
@@ -49,19 +49,19 @@ server = A2AStarletteApplication(
 )
 ```
 
-## Architecture: Two-Tier Queue System
+## Queue Components
 
-This package implements a **two-tier architecture** that separates high-level queue management from direct Redis implementations:
+The package provides both high-level queue managers and direct queue implementations:
 
-### Tier 1 - Queue Managers (High-Level Abstractions)
+### Queue Managers
 - `RedisStreamsQueueManager` - Manages Redis Streams-based queues
 - `RedisPubSubQueueManager` - Manages Redis Pub/Sub-based queues
 - Both implement the A2A SDK's `QueueManager` interface
 
-### Tier 2 - Event Queues (Direct Implementations)
+### Event Queues
 - `RedisStreamsEventQueue` - Direct Redis Streams queue implementation
 - `RedisPubSubEventQueue` - Direct Redis Pub/Sub queue implementation
-- Both implement the A2A SDK's `EventQueue` interface
+- Both implement the `EventQueue` interface through protocol compliance
 
 ## Queue Manager Types: Streams vs Pub/Sub
 

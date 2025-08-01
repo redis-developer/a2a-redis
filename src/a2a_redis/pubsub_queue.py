@@ -43,11 +43,12 @@ from typing import Union, Optional, Dict, Any
 
 import redis.asyncio as redis
 from redis.asyncio.client import PubSub
-from a2a.server.events.event_queue import EventQueue
 from a2a.types import Message, Task, TaskStatusUpdateEvent, TaskArtifactUpdateEvent
 
+from .event_queue_protocol import EventQueueProtocol
 
-class RedisPubSubEventQueue(EventQueue):
+
+class RedisPubSubEventQueue:
     """Redis Pub/Sub-backed EventQueue for real-time, fire-and-forget event delivery.
 
     Provides immediate event broadcasting with minimal latency but no persistence
@@ -187,7 +188,7 @@ class RedisPubSubEventQueue(EventQueue):
         """Check if the queue is closed."""
         return self._closed
 
-    def tap(self) -> "EventQueue":
+    def tap(self) -> "EventQueueProtocol":
         """Create a tap (copy) of this queue.
 
         For pub/sub, this creates a new subscriber to the same channel.

@@ -10,8 +10,8 @@ from typing import Dict, Optional
 
 import redis.asyncio as redis
 from a2a.server.events.queue_manager import QueueManager
-from a2a.server.events.event_queue import EventQueue
 
+from .event_queue_protocol import EventQueueProtocol
 from .streams_queue import RedisStreamsEventQueue
 from .streams_consumer_strategy import ConsumerGroupConfig
 
@@ -39,15 +39,15 @@ class RedisStreamsQueueManager(QueueManager):
         self.redis = redis_client
         self.prefix = prefix
         self.consumer_config = consumer_config or ConsumerGroupConfig()
-        self._queues: Dict[str, EventQueue] = {}
+        self._queues: Dict[str, EventQueueProtocol] = {}
 
-    def _create_queue(self, task_id: str) -> EventQueue:
+    def _create_queue(self, task_id: str) -> EventQueueProtocol:
         """Create a Redis Streams queue instance for a task."""
         return RedisStreamsEventQueue(
             self.redis, task_id, self.prefix, self.consumer_config
         )
 
-    async def add(self, task_id: str, queue: EventQueue) -> None:
+    async def add(self, task_id: str, queue: EventQueueProtocol) -> None:  # type: ignore[override]
         """Add a queue for a task (a2a-sdk interface).
 
         Args:
@@ -67,7 +67,7 @@ class RedisStreamsQueueManager(QueueManager):
             await self._queues[task_id].close()
             del self._queues[task_id]
 
-    async def create_or_tap(self, task_id: str) -> EventQueue:
+    async def create_or_tap(self, task_id: str) -> EventQueueProtocol:  # type: ignore[override]
         """Create or get existing queue for a task (a2a-sdk interface).
 
         Args:
@@ -80,7 +80,7 @@ class RedisStreamsQueueManager(QueueManager):
             self._queues[task_id] = self._create_queue(task_id)
         return self._queues[task_id]
 
-    async def get(self, task_id: str) -> Optional[EventQueue]:
+    async def get(self, task_id: str) -> Optional[EventQueueProtocol]:  # type: ignore[override]
         """Get existing queue for a task (a2a-sdk interface).
 
         Args:
@@ -91,7 +91,7 @@ class RedisStreamsQueueManager(QueueManager):
         """
         return self._queues.get(task_id)
 
-    async def tap(self, task_id: str) -> Optional[EventQueue]:
+    async def tap(self, task_id: str) -> Optional[EventQueueProtocol]:  # type: ignore[override]
         """Create a tap of existing queue for a task (a2a-sdk interface).
 
         Args:
