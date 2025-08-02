@@ -1,6 +1,6 @@
 # a2a-redis
 
-Redis components for the Agent-to-Agent (A2A) Python SDK.
+Redis integrations for the Agent-to-Agent (A2A) Python SDK.
 
 This package provides Redis-backed implementations of core A2A components for persistent task storage, reliable event queue management, and push notification configuration using Redis.
 
@@ -235,41 +235,6 @@ for config in configs:
 # Delete specific config or all configs for a task
 await config_store.delete_info("task123", "webhook_1")  # Delete specific
 await config_store.delete_info("task123")  # Delete all
-```
-
-## Connection Management
-
-The package includes robust connection management utilities with retry logic and health monitoring:
-
-```python
-from a2a_redis.utils import RedisConnectionManager, create_redis_client, redis_retry, safe_redis_operation
-
-# Create managed Redis client
-redis_client = create_redis_client(
-    url="redis://localhost:6379/0",
-    max_connections=50
-)
-
-# Or use connection manager directly
-connection_manager = RedisConnectionManager(
-    host="localhost",
-    port=6379,
-    db=0,
-    max_connections=50,
-    retry_on_timeout=True
-)
-redis_client = connection_manager.client
-
-# Use retry decorator for custom operations
-@redis_retry(max_retries=3, backoff_factor=1.0)
-async def my_redis_operation(redis_client):
-    return await redis_client.get("mykey")
-
-# Safe operations with fallback values
-result = await safe_redis_operation(
-    lambda: redis_client.get("mykey"),
-    fallback="default_value"
-)
 ```
 
 ## Requirements
