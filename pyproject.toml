@@ -43,9 +43,9 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/a2aproject/a2a-redis"
-Repository = "https://github.com/a2aproject/a2a-redis"
-Issues = "https://github.com/a2aproject/a2a-redis/issues"
+Homepage = "https://github.com/redis-developer/a2a-redis"
+Repository = "https://github.com/redis-developer/a2a-redis"
+Issues = "https://github.com/redis-developer/a2a-redis/issues"
 
 [tool.setuptools_scm]
 
