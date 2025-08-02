@@ -151,12 +151,18 @@ class ReleaseManager:
         cmd.append("dist/*")
         return self.run_command(cmd)
 
-    def confirm_publish(self, version: str, test_pypi: bool = False) -> bool:
+    def confirm_publish(
+        self, version: str, test_pypi: bool = False, skip_confirm: bool = False
+    ) -> bool:
         """Ask for confirmation before publishing."""
         repo_name = "Test PyPI" if test_pypi else "PyPI"
 
         print(f"\n⚠️  About to publish version {version} to {repo_name}")
         print("This action cannot be undone!")
+
+        if skip_confirm:
+            print("Auto-confirming due to --yes flag")
+            return True
 
         response = input("Continue? (yes/no): ").lower().strip()
         return response in ["yes", "y"]
@@ -174,6 +180,7 @@ def main():
     parser.add_argument(
         "--skip-checks", action="store_true", help="Skip quality checks and tests"
     )
+    parser.add_argument("--yes", action="store_true", help="Skip confirmation prompts")
 
     args = parser.parse_args()
 
@@ -211,7 +218,7 @@ def main():
     if args.check_only:
         print(f"✓ Check complete - ready to release version {version}")
     elif args.test_pypi:
-        if manager.confirm_publish(version, test_pypi=True):
+        if manager.confirm_publish(version, test_pypi=True, skip_confirm=args.yes):
             if manager.publish_to_pypi(test_pypi=True):
                 print(f"\n🎉 Successfully published {version} to Test PyPI!")
             else:
@@ -220,7 +227,7 @@ def main():
         else:
             print("Cancelled.")
     elif args.pypi:
-        if manager.confirm_publish(version, test_pypi=False):
+        if manager.confirm_publish(version, test_pypi=False, skip_confirm=args.yes):
             if manager.publish_to_pypi(test_pypi=False):
                 print(f"\n🎉 Successfully published {version} to PyPI!")
                 print(f"Install with: pip install a2a-redis=={version}")
