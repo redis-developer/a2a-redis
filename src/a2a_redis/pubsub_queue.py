@@ -46,6 +46,7 @@ from redis.asyncio.client import PubSub
 from a2a.types import Message, Task, TaskStatusUpdateEvent, TaskArtifactUpdateEvent
 
 from .event_queue_protocol import EventQueueProtocol
+from .model_utils import deserialize_from_json, serialize_event, deserialize_event, serialize_to_json
 
 
 class RedisPubSubEventQueue:
@@ -105,16 +106,9 @@ class RedisPubSubEventQueue:
         # Ensure subscription setup
         await self._ensure_setup()
 
-        # Serialize event - convert to dict if it has model_dump, otherwise assume it's serializable
-        if hasattr(event, "model_dump"):
-            event_data = event.model_dump()
-        else:
-            event_data = event
-
-        # Create message with event data
-        message = json.dumps(
-            {"event_type": type(event).__name__, "event_data": event_data}, default=str
-        )
+        # Serialize event using shared utility
+        event_structure = serialize_event(event)
+        message = serialize_to_json(event_structure)
 
         # Publish to Redis pub/sub channel
         await self.redis.publish(self._channel, message)  # type: ignore[misc]
@@ -157,13 +151,10 @@ class RedisPubSubEventQueue:
             if message is None:
                 raise RuntimeError("No events available")
 
-            # Deserialize event data - message["data"] should be bytes
-            data_bytes = message["data"]  # type: ignore[misc]
-            if isinstance(data_bytes, bytes):
-                message_data = json.loads(data_bytes.decode())
-            else:
-                message_data = json.loads(str(data_bytes))  # type: ignore[misc]
-            return message_data["event_data"]
+            # Deserialize event data using shared utility
+            event_structure = deserialize_from_json(message["data"])
+            message_data = deserialize_event(event_structure)
+            return message_data
 
         except asyncio.TimeoutError:
             raise RuntimeError("No events available")

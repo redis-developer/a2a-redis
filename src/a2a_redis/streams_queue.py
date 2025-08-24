@@ -34,6 +34,7 @@ from a2a.types import Message, Task, TaskStatusUpdateEvent, TaskArtifactUpdateEv
 
 from .event_queue_protocol import EventQueueProtocol
 from .streams_consumer_strategy import ConsumerGroupConfig
+from .model_utils import serialize_event, deserialize_event, serialize_to_json, deserialize_from_json
 
 
 class RedisStreamsEventQueue:
@@ -103,18 +104,14 @@ class RedisStreamsEventQueue:
             await self._ensure_consumer_group()
             self._consumer_group_ensured = True
 
-        # Serialize event - convert to dict if it has model_dump, otherwise assume it's serializable
-        if hasattr(event, "model_dump"):
-            event_data = event.model_dump()
-        else:
-            event_data = event
+        # Serialize event using shared utility
+        event_structure = serialize_event(event)
 
         # Create stream entry with event data
         fields = {
-            "event_type": type(event).__name__,
-            "event_data": json.dumps(event_data, default=str),
+            "event_type": event_structure["event_type"],
+            "event_data": serialize_to_json(event_structure["event_data"]),
         }
-
         # Add to Redis stream (XADD)
         await self.redis.xadd(self._stream_key, fields)  # type: ignore[misc]
 
@@ -160,9 +157,12 @@ class RedisStreamsEventQueue:
             _, messages = result[0]
             message_id, fields = messages[0]
 
-            # Deserialize event data
-            event_data = json.loads(fields[b"event_data"].decode())
-
+            # Deserialize event data using shared utility
+            event_structure = {
+                "event_type": fields[b"event_type"].decode() if b"event_type" in fields else None,
+                "event_data": deserialize_from_json(fields[b"event_data"])
+            }
+            event_data = deserialize_event(event_structure)
             # Acknowledge the message
             await self.redis.xack(self._stream_key, self.consumer_group, message_id)  # type: ignore[misc]
 
