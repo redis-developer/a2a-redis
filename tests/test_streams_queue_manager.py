@@ -1,5 +1,7 @@
 """Tests for Redis Streams queue manager and event queue implementations."""
 
+import asyncio
+
 import pytest
 from unittest.mock import MagicMock
 
@@ -129,11 +131,11 @@ class TestRedisStreamsEventQueue:
 
     @pytest.mark.asyncio
     async def test_dequeue_event_closed_queue(self, mock_redis):
-        """Test dequeuing from a closed queue raises error."""
+        """Test dequeuing from a closed queue raises asyncio.QueueEmpty for a2a-sdk compatibility."""
         queue = RedisStreamsEventQueue(mock_redis, "task_123")
         queue._closed = True
 
-        with pytest.raises(RuntimeError, match="Cannot dequeue from closed queue"):
+        with pytest.raises(asyncio.QueueEmpty, match="Queue is closed"):
             await queue.dequeue_event()
 
     @pytest.mark.asyncio

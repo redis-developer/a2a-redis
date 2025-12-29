@@ -26,11 +26,12 @@ offering persistent, reliable event delivery with consumer groups, acknowledgmen
 For real-time, fire-and-forget scenarios, consider RedisPubSubEventQueue instead.
 """
 
+import asyncio
 import json
 from typing import Optional, Union
 
 import redis.asyncio as redis
-from a2a.types import Message, Task, TaskStatusUpdateEvent, TaskArtifactUpdateEvent
+from a2a.types import Message, Task, TaskArtifactUpdateEvent, TaskStatusUpdateEvent
 
 from .event_queue_protocol import EventQueueProtocol
 from .streams_consumer_strategy import ConsumerGroupConfig
@@ -127,13 +128,14 @@ class RedisStreamsEventQueue:
             no_wait: If True, return immediately if no events available
 
         Returns:
-            Event data dictionary
+            Reconstructed Pydantic model (Message, Task, TaskStatusUpdateEvent, or TaskArtifactUpdateEvent)
 
         Raises:
-            RuntimeError: If queue is closed or no events available
+            asyncio.QueueEmpty: If queue is closed (for compatibility with a2a-sdk EventConsumer)
+            RuntimeError: If no events available or other errors occur
         """
         if self._closed:
-            raise RuntimeError("Cannot dequeue from closed queue")
+            raise asyncio.QueueEmpty("Queue is closed")
 
         # Ensure consumer group exists on first use
         if not self._consumer_group_ensured:
@@ -162,11 +164,22 @@ class RedisStreamsEventQueue:
 
             # Deserialize event data
             event_data = json.loads(fields[b"event_data"].decode())
+            event_type = fields[b"event_type"].decode()
 
             # Acknowledge the message
             await self.redis.xack(self._stream_key, self.consumer_group, message_id)  # type: ignore[misc]
 
-            return event_data
+            # Reconstruct the actual Pydantic model for a2a-sdk compatibility
+            if event_type == "TaskStatusUpdateEvent":
+                return TaskStatusUpdateEvent(**event_data)
+            elif event_type == "TaskArtifactUpdateEvent":
+                return TaskArtifactUpdateEvent(**event_data)
+            elif event_type == "Message":
+                return Message(**event_data)
+            elif event_type == "Task":
+                return Task(**event_data)
+
+            return event_data  # type: ignore[return-value]
 
         except Exception as e:  # type: ignore[misc]
             if "NOGROUP" in str(e):
