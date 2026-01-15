@@ -44,6 +44,52 @@ class TestRedisTaskStore:
         assert json.loads(mapping["metadata"]) == sample_task_data["metadata"]
 
     @pytest.mark.asyncio
+    async def test_save_task_with_context(self, mock_redis, sample_task_data):
+        """Test that save() accepts context parameter (SDK v0.3.x compatibility).
+
+        This test verifies the fix for:
+        TypeError: RedisTaskStore.save() takes 2 positional arguments but 3 were given
+        """
+        from a2a.types import Task
+        from a2a.server.context import ServerCallContext
+
+        task = Task(**sample_task_data)
+        context = MagicMock(spec=ServerCallContext)
+
+        store = RedisTaskStore(mock_redis)
+        # This should not raise TypeError
+        await store.save(task, context)
+
+        mock_redis.hset.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_get_task_with_context(self, mock_redis):
+        """Test that get() accepts context parameter (SDK v0.3.x compatibility)."""
+        from a2a.server.context import ServerCallContext
+
+        mock_redis.hgetall.return_value = {}
+        context = MagicMock(spec=ServerCallContext)
+
+        store = RedisTaskStore(mock_redis)
+        # This should not raise TypeError
+        await store.get("task_123", context)
+
+        mock_redis.hgetall.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_delete_task_with_context(self, mock_redis):
+        """Test that delete() accepts context parameter (SDK v0.3.x compatibility)."""
+        from a2a.server.context import ServerCallContext
+
+        context = MagicMock(spec=ServerCallContext)
+
+        store = RedisTaskStore(mock_redis)
+        # This should not raise TypeError
+        await store.delete("task_123", context)
+
+        mock_redis.delete.assert_called_once()
+
+    @pytest.mark.asyncio
     async def test_get_task_exists(self, mock_redis, sample_task_data):
         """Test retrieving an existing task."""
 
@@ -312,6 +358,49 @@ class TestRedisJSONTaskStore:
         # Get the mock json object that was already set up in conftest
         mock_json = mock_redis.json.return_value
         mock_json.set.assert_called_once_with("task:task_123", "$", expected_data)
+
+    @pytest.mark.asyncio
+    async def test_save_task_with_context(self, mock_redis, sample_task_data):
+        """Test that save() accepts context parameter (SDK v0.3.x compatibility)."""
+        from a2a.types import Task
+        from a2a.server.context import ServerCallContext
+
+        task = Task(**sample_task_data)
+        context = MagicMock(spec=ServerCallContext)
+
+        store = RedisJSONTaskStore(mock_redis)
+        # This should not raise TypeError
+        await store.save(task, context)
+
+        mock_redis.json.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_get_task_with_context(self, mock_redis):
+        """Test that get() accepts context parameter (SDK v0.3.x compatibility)."""
+        from a2a.server.context import ServerCallContext
+
+        mock_json = mock_redis.json.return_value
+        mock_json.get.return_value = None
+        context = MagicMock(spec=ServerCallContext)
+
+        store = RedisJSONTaskStore(mock_redis)
+        # This should not raise TypeError
+        await store.get("task_123", context)
+
+        mock_json.get.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_delete_task_with_context(self, mock_redis):
+        """Test that delete() accepts context parameter (SDK v0.3.x compatibility)."""
+        from a2a.server.context import ServerCallContext
+
+        context = MagicMock(spec=ServerCallContext)
+
+        store = RedisJSONTaskStore(mock_redis)
+        # This should not raise TypeError
+        await store.delete("task_123", context)
+
+        mock_redis.delete.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_get_task_exists(self, mock_redis, sample_task_data):
