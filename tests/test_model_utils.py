@@ -21,7 +21,7 @@ async def test_message_serialization_roundtrip():
 
     # Should be same type and data
     assert isinstance(reconstructed, type(original_message))
-    assert reconstructed.messageId == original_message.messageId
+    assert reconstructed.message_id == original_message.message_id
     assert reconstructed.role == original_message.role
 
 
@@ -52,7 +52,7 @@ async def test_streams_queue_pydantic_model_preservation():
 
     # Should return actual Message instance, not dict
     assert isinstance(result, Message)
-    assert result.messageId == "test"
+    assert result.message_id == "test"
 
 
 def test_deserialize_event_non_dict_passthrough():
