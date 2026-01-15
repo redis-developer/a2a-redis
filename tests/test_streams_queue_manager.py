@@ -13,6 +13,70 @@ from a2a_redis.streams_consumer_strategy import (
 )
 
 
+class TestConsumerGroupConfig:
+    """Tests for ConsumerGroupConfig."""
+
+    def test_custom_strategy_requires_group_name(self):
+        """Test that CUSTOM strategy requires custom_group_name."""
+        with pytest.raises(ValueError, match="custom_group_name required"):
+            ConsumerGroupConfig(strategy=ConsumerGroupStrategy.CUSTOM)
+
+    def test_custom_strategy_with_group_name(self):
+        """Test CUSTOM strategy with provided group name."""
+        config = ConsumerGroupConfig(
+            strategy=ConsumerGroupStrategy.CUSTOM, custom_group_name="my-custom-group"
+        )
+        assert config.get_consumer_group_name("task_123") == "my-custom-group"
+
+    def test_shared_load_balancing_strategy(self):
+        """Test SHARED_LOAD_BALANCING consumer group name."""
+        config = ConsumerGroupConfig(
+            strategy=ConsumerGroupStrategy.SHARED_LOAD_BALANCING
+        )
+        assert config.get_consumer_group_name("task_123") == "processors-task_123"
+
+    def test_instance_isolated_strategy(self):
+        """Test INSTANCE_ISOLATED consumer group name."""
+        config = ConsumerGroupConfig(
+            strategy=ConsumerGroupStrategy.INSTANCE_ISOLATED, instance_id="myinstance"
+        )
+        assert (
+            config.get_consumer_group_name("task_123")
+            == "processors-task_123-myinstance"
+        )
+
+    def test_get_consumer_id(self):
+        """Test consumer ID generation."""
+        config = ConsumerGroupConfig(consumer_prefix="test", instance_id="inst123")
+        assert config.get_consumer_id() == "test-inst123"
+
+    def test_auto_generated_instance_id(self):
+        """Test that instance_id is auto-generated when not provided."""
+        config = ConsumerGroupConfig()
+        assert config.instance_id is not None
+        assert len(config.instance_id) == 8  # uuid hex[:8]
+
+    def test_custom_strategy_none_group_name_at_runtime(self):
+        """Test CUSTOM strategy raises ValueError if custom_group_name is somehow None at runtime."""
+        config = ConsumerGroupConfig(
+            strategy=ConsumerGroupStrategy.CUSTOM, custom_group_name="my-group"
+        )
+        # Force custom_group_name to None to test the runtime check
+        config.custom_group_name = None
+
+        with pytest.raises(ValueError, match="custom_group_name cannot be None"):
+            config.get_consumer_group_name("task_123")
+
+    def test_unknown_strategy_raises_error(self):
+        """Test that unknown strategy raises ValueError."""
+        config = ConsumerGroupConfig()
+        # Force an invalid strategy value to test the else branch
+        config.strategy = "invalid_strategy"  # type: ignore[assignment]
+
+        with pytest.raises(ValueError, match="Unknown strategy"):
+            config.get_consumer_group_name("task_123")
+
+
 class TestRedisStreamsEventQueue:
     """Tests for RedisStreamsEventQueue."""
 
@@ -173,6 +237,90 @@ class TestRedisStreamsEventQueue:
         """Test task_done method (no-op for streams)."""
         queue = RedisStreamsEventQueue(mock_redis, "task_123")
         queue.task_done()  # Should not raise any errors
+
+    def test_is_closed(self, mock_redis):
+        """Test is_closed method."""
+        queue = RedisStreamsEventQueue(mock_redis, "task_123")
+        assert queue.is_closed() is False
+        queue._closed = True
+        assert queue.is_closed() is True
+
+    @pytest.mark.asyncio
+    async def test_dequeue_event_nogroup_error(self, mock_redis):
+        """Test dequeuing when consumer group doesn't exist (NOGROUP error)."""
+        queue = RedisStreamsEventQueue(mock_redis, "task_123")
+
+        # Simulate NOGROUP error - consumer group was deleted
+        mock_redis.xreadgroup.side_effect = Exception(
+            "NOGROUP No such key or consumer group"
+        )
+
+        with pytest.raises(RuntimeError, match="Consumer group recreated"):
+            await queue.dequeue_event(no_wait=True)
+
+        # Verify consumer group was recreated
+        assert mock_redis.xgroup_create.call_count == 2  # Initial + recreate
+
+    @pytest.mark.asyncio
+    async def test_dequeue_event_other_error(self, mock_redis):
+        """Test dequeuing with other Redis errors."""
+        queue = RedisStreamsEventQueue(mock_redis, "task_123")
+
+        # Simulate a different error
+        mock_redis.xreadgroup.side_effect = Exception("Some other Redis error")
+
+        with pytest.raises(RuntimeError, match="Error reading from stream"):
+            await queue.dequeue_event(no_wait=True)
+
+    @pytest.mark.asyncio
+    async def test_close_queue_with_exception(self, mock_redis):
+        """Test closing queue when xpending_range raises exception."""
+        queue = RedisStreamsEventQueue(mock_redis, "task_123")
+
+        # Simulate consumer group not existing
+        mock_redis.xpending_range.side_effect = Exception("NOGROUP")
+
+        # Should not raise - exception is caught and ignored
+        await queue.close()
+        assert queue._closed
+
+    @pytest.mark.asyncio
+    async def test_close_queue_no_pending_messages(self, mock_redis):
+        """Test closing queue with no pending messages."""
+        queue = RedisStreamsEventQueue(mock_redis, "task_123")
+
+        # No pending messages
+        mock_redis.xpending_range.return_value = []
+
+        await queue.close()
+        assert queue._closed
+        # xack should not be called when no pending messages
+        mock_redis.xack.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_ensure_consumer_group_already_exists(self, mock_redis):
+        """Test _ensure_consumer_group when group already exists (BUSYGROUP)."""
+        queue = RedisStreamsEventQueue(mock_redis, "task_123")
+
+        # Simulate BUSYGROUP error - group already exists
+        mock_redis.xgroup_create.side_effect = Exception(
+            "BUSYGROUP Consumer Group name already exists"
+        )
+
+        # Should not raise - BUSYGROUP is handled
+        await queue._ensure_consumer_group()
+
+    @pytest.mark.asyncio
+    async def test_ensure_consumer_group_other_error(self, mock_redis):
+        """Test _ensure_consumer_group re-raises non-BUSYGROUP errors."""
+        queue = RedisStreamsEventQueue(mock_redis, "task_123")
+
+        # Simulate some other error (not BUSYGROUP)
+        mock_redis.xgroup_create.side_effect = Exception("NOPERM no permissions")
+
+        # Should re-raise the error
+        with pytest.raises(Exception, match="NOPERM no permissions"):
+            await queue._ensure_consumer_group()
 
 
 class TestRedisStreamsQueueManager:

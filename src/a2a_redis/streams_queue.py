@@ -34,7 +34,12 @@ from a2a.types import Message, Task, TaskArtifactUpdateEvent, TaskStatusUpdateEv
 
 from .event_queue_protocol import EventQueueProtocol
 from .streams_consumer_strategy import ConsumerGroupConfig
-from .model_utils import serialize_event, deserialize_event, serialize_to_json, deserialize_from_json
+from .model_utils import (
+    serialize_event,
+    deserialize_event,
+    serialize_to_json,
+    deserialize_from_json,
+)
 
 
 class RedisStreamsEventQueue:
@@ -160,8 +165,10 @@ class RedisStreamsEventQueue:
 
             # Deserialize event data using shared utility
             event_structure = {
-                "event_type": fields[b"event_type"].decode() if b"event_type" in fields else None,
-                "event_data": deserialize_from_json(fields[b"event_data"])
+                "event_type": fields[b"event_type"].decode()
+                if b"event_type" in fields
+                else None,
+                "event_data": deserialize_from_json(fields[b"event_data"]),
             }
 
             # Acknowledge the message

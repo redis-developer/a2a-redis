@@ -152,3 +152,53 @@ class TestRedisPubSubEventQueue:
 
         queue = RedisPubSubEventQueue(mock_redis, "task_123")
         queue.task_done()  # Should not raise any errors
+
+    @pytest.mark.asyncio
+    async def test_dequeue_event_pubsub_not_initialized(self, mock_redis):
+        """Test dequeueing when pubsub is somehow not initialized after setup."""
+        mock_pubsub = MagicMock()
+        mock_pubsub.subscribe = AsyncMock()
+        mock_redis.pubsub.return_value = mock_pubsub
+
+        queue = RedisPubSubEventQueue(mock_redis, "task_123")
+
+        # Simulate setup completing but pubsub being None (edge case)
+        queue._setup_complete = True
+        queue._pubsub = None
+
+        with pytest.raises(RuntimeError, match="Pub/sub not initialized"):
+            await queue.dequeue_event()
+
+    @pytest.mark.asyncio
+    async def test_close_queue_with_exception(self, mock_redis):
+        """Test closing queue when cleanup operations raise exceptions."""
+        mock_pubsub = MagicMock()
+        mock_pubsub.unsubscribe = AsyncMock(side_effect=Exception("Connection error"))
+        mock_pubsub.close = AsyncMock()
+        mock_redis.pubsub.return_value = mock_pubsub
+
+        queue = RedisPubSubEventQueue(mock_redis, "task_123")
+        queue._pubsub = mock_pubsub
+        queue._setup_complete = True
+
+        # Should not raise - exception is caught and ignored
+        await queue.close()
+        assert queue.is_closed()
+        # Pubsub should be set to None and setup_complete should be False
+        assert queue._pubsub is None
+        assert queue._setup_complete is False
+
+    @pytest.mark.asyncio
+    async def test_ensure_setup_when_closed(self, mock_redis):
+        """Test _ensure_setup returns early when queue is closed."""
+        mock_pubsub = MagicMock()
+        mock_pubsub.subscribe = AsyncMock()
+        mock_redis.pubsub.return_value = mock_pubsub
+
+        queue = RedisPubSubEventQueue(mock_redis, "task_123")
+        queue._closed = True
+
+        # Should return early without setting up
+        await queue._ensure_setup()
+        assert queue._pubsub is None
+        assert not queue._setup_complete

@@ -123,6 +123,40 @@ class TestRedisTaskStore:
         assert result["json_dict"] == {"key": "value"}
         assert result["invalid_json"] == '{"incomplete"'  # Falls back to string
 
+    def test_serialize_data_with_pydantic_nested_model(self, mock_redis):
+        """Test serialization of nested Pydantic models."""
+        from a2a.types import TaskStatus, TaskState
+
+        store = RedisTaskStore(mock_redis)
+
+        # Test with a Pydantic model as a value
+        status = TaskStatus(state=TaskState.working)
+        data = {"status": status}
+
+        serialized = store._serialize_data(data)
+
+        # Should be JSON with type info
+        status_json = json.loads(serialized["status"])
+        assert "_type" in status_json
+        assert "_data" in status_json
+        assert status_json["_type"] == "a2a.types.TaskStatus"
+
+    def test_deserialize_data_unknown_type(self, mock_redis):
+        """Test deserialization of unknown Pydantic model type."""
+        store = RedisTaskStore(mock_redis)
+
+        # Create data with unknown type marker
+        redis_data = {
+            b"custom": json.dumps(
+                {"_type": "some.unknown.Type", "_data": {"field": "value"}}
+            ).encode()
+        }
+
+        result = store._deserialize_data(redis_data)
+
+        # Should fall back to returning just the _data dict
+        assert result["custom"] == {"field": "value"}
+
     @pytest.mark.asyncio
     async def test_update_task_exists(self, mock_redis):
         """Test updating an existing task."""
@@ -368,3 +402,55 @@ class TestRedisJSONTaskStore:
 
         assert result is True
         mock_redis.exists.assert_called_once_with("task:task_123")
+
+    @pytest.mark.asyncio
+    async def test_get_task_returns_list(self, mock_redis, sample_task_data):
+        """Test retrieving task when JSON.GET returns a list (JSONPath result)."""
+        from a2a.types import Task
+
+        mock_json = mock_redis.json.return_value
+        # Simulate JSONPath returning a list
+        mock_json.get.return_value = [sample_task_data]
+
+        store = RedisJSONTaskStore(mock_redis)
+        result = await store.get("task_123")
+
+        assert isinstance(result, Task)
+        assert result.id == "task_123"
+
+    @pytest.mark.asyncio
+    async def test_get_task_returns_unexpected_type(self, mock_redis):
+        """Test retrieving task when JSON.GET returns unexpected type."""
+        mock_json = mock_redis.json.return_value
+        # Simulate JSONPath returning something unexpected (e.g., a string or number)
+        mock_json.get.return_value = "unexpected"
+
+        store = RedisJSONTaskStore(mock_redis)
+        result = await store.get("task_123")
+
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_get_task_returns_empty_list(self, mock_redis):
+        """Test retrieving task when JSON.GET returns empty list."""
+        mock_json = mock_redis.json.return_value
+        mock_json.get.return_value = []
+
+        store = RedisJSONTaskStore(mock_redis)
+        result = await store.get("task_123")
+
+        # Empty list should be treated as no result
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_update_task_exception(self, mock_redis, sample_task_data):
+        """Test update_task returns False when exception occurs during update."""
+        mock_json = mock_redis.json.return_value
+        mock_json.get.return_value = sample_task_data
+        # Simulate error during save
+        mock_json.set.side_effect = Exception("Connection error")
+
+        store = RedisJSONTaskStore(mock_redis)
+        result = await store.update_task("task_123", {"status": "completed"})
+
+        assert result is False

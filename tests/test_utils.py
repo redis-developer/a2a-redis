@@ -171,6 +171,27 @@ class TestRedisConnectionManager:
             # Should still work despite close error
             assert result is True  # Because ping succeeds by default
 
+    def test_reconnect_health_check_exception(self):
+        """Test reconnection when health_check throws an exception."""
+        with (
+            patch("a2a_redis.utils.ConnectionPool"),
+            patch("a2a_redis.utils.redis.Redis") as mock_redis_class,
+        ):
+            mock_client = MagicMock()
+            mock_redis_class.return_value = mock_client
+            # health_check will throw a non-Redis exception
+            mock_client.ping.side_effect = RuntimeError(
+                "Unexpected error in health check"
+            )
+
+            manager = RedisConnectionManager()
+            manager._client = mock_client
+
+            result = manager.reconnect()
+
+            # Should return False when health_check throws
+            assert result is False
+
 
 class TestRedisRetryDecorator:
     """Tests for redis_retry decorator."""
@@ -402,6 +423,24 @@ class TestRedisHealthMonitor:
             "last_check": 12345.0,
         }
 
+    def test_check_health_restored_after_failures(self):
+        """Test health check restored after being unhealthy."""
+        mock_manager = MagicMock()
+        mock_manager.health_check.return_value = True
+
+        monitor = RedisHealthMonitor(mock_manager)
+        # Simulate previous unhealthy state
+        monitor.is_healthy = False
+        monitor.consecutive_failures = 2
+        monitor.last_check = 0  # Force check
+
+        # Now health check succeeds
+        result = monitor.check_health(force=True)
+
+        assert result is True
+        assert monitor.is_healthy is True
+        assert monitor.consecutive_failures == 0
+
 
 class TestCreateRedisClient:
     """Tests for create_redis_client function."""
@@ -445,4 +484,54 @@ class TestCreateRedisClient:
             create_redis_client()
 
             # Just check that Redis was called - the exact parameters may vary
+            mock_redis.assert_called_once()
+
+
+class TestCreateSyncRedisClient:
+    """Tests for create_sync_redis_client function."""
+
+    def test_create_from_url(self):
+        """Test creating sync client from URL."""
+        from a2a_redis.utils import create_sync_redis_client
+
+        with patch("a2a_redis.utils.redis.from_url") as mock_from_url:
+            create_sync_redis_client(url="redis://localhost:6379/0")
+
+            mock_from_url.assert_called_once_with(
+                "redis://localhost:6379/0",
+                retry_on_timeout=True,
+                health_check_interval=30,
+                socket_connect_timeout=5.0,
+                socket_timeout=5.0,
+            )
+
+    def test_create_from_params(self):
+        """Test creating sync client from parameters."""
+        from a2a_redis.utils import create_sync_redis_client
+
+        with patch("a2a_redis.utils.redis.Redis") as mock_redis:
+            create_sync_redis_client(
+                host="redis.example.com", port=6380, db=1, password="secret"
+            )
+
+            mock_redis.assert_called_once_with(
+                host="redis.example.com",
+                port=6380,
+                db=1,
+                password="secret",
+                username=None,
+                ssl=False,
+                retry_on_timeout=True,
+                health_check_interval=30,
+                socket_connect_timeout=5.0,
+                socket_timeout=5.0,
+            )
+
+    def test_create_with_defaults(self):
+        """Test creating sync client with default parameters."""
+        from a2a_redis.utils import create_sync_redis_client
+
+        with patch("a2a_redis.utils.redis.Redis") as mock_redis:
+            create_sync_redis_client()
+
             mock_redis.assert_called_once()

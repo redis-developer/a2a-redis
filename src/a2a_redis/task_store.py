@@ -102,9 +102,7 @@ class RedisTaskStore(TaskStore):
 
         return result
 
-    async def save(
-        self, task: Task, context: ServerCallContext | None = None
-    ) -> None:
+    async def save(self, task: Task, context: ServerCallContext | None = None) -> None:
         """Save a task to Redis.
 
         Args:
@@ -206,9 +204,7 @@ class RedisJSONTaskStore(TaskStore):
         """Generate the Redis key for a task."""
         return f"{self.prefix}{task_id}"
 
-    async def save(
-        self, task: Task, context: ServerCallContext | None = None
-    ) -> None:
+    async def save(self, task: Task, context: ServerCallContext | None = None) -> None:
         """Save a task to Redis using JSON.
 
         Args:
