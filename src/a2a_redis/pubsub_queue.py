@@ -37,7 +37,6 @@ to the default Redis Streams implementation. Choose based on your use case:
 - Critical event processing
 """
 
-import json
 import asyncio
 from typing import Union, Optional, Dict, Any
 
@@ -46,7 +45,12 @@ from redis.asyncio.client import PubSub
 from a2a.types import Message, Task, TaskStatusUpdateEvent, TaskArtifactUpdateEvent
 
 from .event_queue_protocol import EventQueueProtocol
-from .model_utils import deserialize_from_json, serialize_event, deserialize_event, serialize_to_json
+from .model_utils import (
+    deserialize_from_json,
+    serialize_event,
+    deserialize_event,
+    serialize_to_json,
+)
 
 
 class RedisPubSubEventQueue:

@@ -145,7 +145,7 @@ def redis_retry(
             logger.error(f"Redis operation failed after {max_retries + 1} attempts")
             if last_exception:
                 raise last_exception
-            raise RuntimeError("Redis operation failed")
+            raise RuntimeError("Redis operation failed")  # pragma: no cover
 
         return wrapper
 
