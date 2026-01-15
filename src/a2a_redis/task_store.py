@@ -4,6 +4,7 @@ import json
 from typing import Any, Dict, List, Optional, Union
 
 import redis.asyncio as redis
+from a2a.server.context import ServerCallContext
 from a2a.server.tasks.task_store import TaskStore
 from a2a.types import Task
 
@@ -101,20 +102,26 @@ class RedisTaskStore(TaskStore):
 
         return result
 
-    async def save(self, task: Task) -> None:
+    async def save(
+        self, task: Task, context: ServerCallContext | None = None
+    ) -> None:
         """Save a task to Redis.
 
         Args:
             task: Task instance to save
+            context: Optional server call context (unused, for interface compatibility)
         """
         serialized_data = self._serialize_data(task)
         await self.redis.hset(self._task_key(task.id), mapping=serialized_data)  # type: ignore[misc]
 
-    async def get(self, task_id: str) -> Optional[Task]:
+    async def get(
+        self, task_id: str, context: ServerCallContext | None = None
+    ) -> Optional[Task]:
         """Retrieve a task from Redis.
 
         Args:
             task_id: Task identifier
+            context: Optional server call context (unused, for interface compatibility)
 
         Returns:
             Task instance or None if not found
@@ -126,11 +133,14 @@ class RedisTaskStore(TaskStore):
         task_data = self._deserialize_data(data)  # type: ignore[arg-type]
         return Task(**task_data)
 
-    async def delete(self, task_id: str) -> None:
+    async def delete(
+        self, task_id: str, context: ServerCallContext | None = None
+    ) -> None:
         """Delete a task from Redis.
 
         Args:
             task_id: Task identifier
+            context: Optional server call context (unused, for interface compatibility)
         """
         await self.redis.delete(self._task_key(task_id))  # type: ignore[misc]
 
@@ -196,20 +206,26 @@ class RedisJSONTaskStore(TaskStore):
         """Generate the Redis key for a task."""
         return f"{self.prefix}{task_id}"
 
-    async def save(self, task: Task) -> None:
+    async def save(
+        self, task: Task, context: ServerCallContext | None = None
+    ) -> None:
         """Save a task to Redis using JSON.
 
         Args:
             task: Task instance to save
+            context: Optional server call context (unused, for interface compatibility)
         """
         task_data = task.model_dump() if hasattr(task, "model_dump") else task
         await self.redis.json().set(self._task_key(task.id), "$", task_data)  # type: ignore[misc]
 
-    async def get(self, task_id: str) -> Optional[Task]:
+    async def get(
+        self, task_id: str, context: ServerCallContext | None = None
+    ) -> Optional[Task]:
         """Retrieve a task from Redis using JSON.
 
         Args:
             task_id: Task identifier
+            context: Optional server call context (unused, for interface compatibility)
 
         Returns:
             Task instance or None if not found
@@ -229,11 +245,14 @@ class RedisJSONTaskStore(TaskStore):
         except (Exception,):  # type: ignore[misc]
             return None
 
-    async def delete(self, task_id: str) -> None:
+    async def delete(
+        self, task_id: str, context: ServerCallContext | None = None
+    ) -> None:
         """Delete a task from Redis.
 
         Args:
             task_id: Task identifier
+            context: Optional server call context (unused, for interface compatibility)
         """
         await self.redis.delete(self._task_key(task_id))  # type: ignore[misc]
 
