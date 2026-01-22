@@ -4,37 +4,24 @@ on:
   release:
     types: [published]
 
+env:
+  PYTHON_VERSION: "3.12"
+
 jobs:
   build:
     runs-on: ubuntu-latest
-    outputs:
-      version: ${{ steps.get_version.outputs.version }}
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Get version from tag
-        id: get_version
-        run: echo "version=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
-
       - name: Install uv
-        uses: astral-sh/setup-uv@v4
-
-      - name: Set up Python
-        run: uv python install 3.12
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          python-version: ${{ env.PYTHON_VERSION }}
 
       - name: Install dependencies
-        run: uv sync --dev
-
-      - name: Verify version matches tag
-        run: |
-          FILE_VERSION=$(grep -oP '__version__\s*=\s*"\K[^"]+' src/a2a_redis/__init__.py)
-          TAG_VERSION="${GITHUB_REF#refs/tags/v}"
-          if [ "$FILE_VERSION" != "$TAG_VERSION" ]; then
-            echo "❌ Version mismatch: __init__.py has $FILE_VERSION but tag is v$TAG_VERSION"
-            exit 1
-          fi
-          echo "✅ Version $FILE_VERSION matches tag"
+        run: uv sync --frozen
 
       - name: Run linting
         run: |
@@ -45,7 +32,7 @@ jobs:
         run: uv run pyright src/
 
       - name: Build package
-        run: uv run python -m build
+        run: uv build
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
@@ -59,26 +46,23 @@ jobs:
     environment: pypi
 
     steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
       - name: Download build artifacts
         uses: actions/download-artifact@v4
         with:
           name: dist
           path: dist/
 
-      - name: Install uv
-        uses: astral-sh/setup-uv@v4
-
-      - name: Set up Python
-        run: uv python install 3.12
-
-      - name: Install twine
-        run: uv pip install --system twine
-
       - name: Publish to PyPI
         env:
-          TWINE_USERNAME: __token__
-          TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
-        run: twine upload dist/*
+          UV_PUBLISH_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
+        run: uv publish
 
       - name: Upload release artifacts
         env:
