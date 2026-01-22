@@ -28,7 +28,7 @@ jobs:
 
       - name: Verify version matches tag
         run: |
-          FILE_VERSION=$(python -c "from a2a_redis import __version__; print(__version__)")
+          FILE_VERSION=$(grep -oP '__version__\s*=\s*"\K[^"]+' src/a2a_redis/__init__.py)
           TAG_VERSION="${GITHUB_REF#refs/tags/v}"
           if [ "$FILE_VERSION" != "$TAG_VERSION" ]; then
             echo "❌ Version mismatch: __init__.py has $FILE_VERSION but tag is v$TAG_VERSION"
