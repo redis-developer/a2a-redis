@@ -10,7 +10,7 @@ from .streams_consumer_strategy import ConsumerGroupStrategy, ConsumerGroupConfi
 from .queue_types import QueueType
 from .event_queue_protocol import EventQueueProtocol
 
-__version__ = "0.1.1"
+__version__ = "0.2.1"
 
 __all__ = [
     # Task storage

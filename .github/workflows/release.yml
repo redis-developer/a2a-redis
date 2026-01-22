@@ -1,0 +1,86 @@
+name: Release
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.get_version.outputs.version }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Get version from tag
+        id: get_version
+        run: echo "version=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Install dependencies
+        run: uv sync --dev
+
+      - name: Verify version matches tag
+        run: |
+          FILE_VERSION=$(python -c "import re; print(re.search(r'__version__\s*=\s*[\"']([^\"']+)[\"']', open('src/a2a_redis/__init__.py').read()).group(1))")
+          TAG_VERSION="${GITHUB_REF#refs/tags/v}"
+          if [ "$FILE_VERSION" != "$TAG_VERSION" ]; then
+            echo "❌ Version mismatch: __init__.py has $FILE_VERSION but tag is v$TAG_VERSION"
+            exit 1
+          fi
+          echo "✅ Version $FILE_VERSION matches tag"
+
+      - name: Run linting
+        run: |
+          uv run ruff check src/ tests/
+          uv run ruff format --check src/ tests/
+
+      - name: Run type checking
+        run: uv run pyright src/
+
+      - name: Build package
+        run: uv run python -m build
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    environment: pypi
+
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Install twine
+        run: uv pip install --system twine
+
+      - name: Publish to PyPI
+        env:
+          TWINE_USERNAME: __token__
+          TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
+        run: twine upload dist/*
+
+      - name: Upload release artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload ${{ github.event.release.tag_name }} dist/* --clobber

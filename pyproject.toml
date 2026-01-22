@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=45", "wheel", "setuptools_scm[toml]>=6.2"]
+requires = ["setuptools>=45", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -47,7 +47,8 @@ Homepage = "https://github.com/redis-developer/a2a-redis"
 Repository = "https://github.com/redis-developer/a2a-redis"
 Issues = "https://github.com/redis-developer/a2a-redis/issues"
 
-[tool.setuptools_scm]
+[tool.setuptools.dynamic]
+version = {attr = "a2a_redis.__version__"}
 
 [tool.setuptools.packages.find]
 where = ["src"]
